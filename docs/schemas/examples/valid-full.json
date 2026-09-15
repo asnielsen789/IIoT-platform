@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "messageId": "01J8F2K9QS4T7V0X3Z6B8N1M5B",
+  "deviceId": "tank-000123",
+  "sentAt": "2026-09-14T06:00:12Z",
+  "sequence": 4711,
+  "measurements": [
+    {
+      "type": "level",
+      "value": 1432.5,
+      "unit": "mm",
+      "measuredAt": "2026-09-14T06:00:10Z",
+      "quality": "ok"
+    }
+  ],
+  "device": {
+    "firmware": "1.4.2",
+    "battery": { "value": 3.61, "unit": "V" },
+    "signal": { "rsrp": -104, "rsrq": -11 }
+  }
+}

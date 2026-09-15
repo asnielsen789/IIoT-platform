@@ -1,0 +1,10 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/IIoT.Core/IIoT.Core.csproj" />
+    <Project Path="src/IIoT.Functions/IIoT.Functions.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/IIoT.Core.Tests/IIoT.Core.Tests.csproj" />
+    <Project Path="tests/IIoT.Integration.Tests/IIoT.Integration.Tests.csproj" />
+  </Folder>
+</Solution>

@@ -1,0 +1,124 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://asnielsen789.github.io/IIoT-platform/schemas/telemetry-v1.schema.json",
+  "title": "Sensor telemetry v1",
+  "description": "Normative contract for telemetry from an NB-IoT sensor to Azure IoT Hub. See docs/mqtt-payload.md. Consumers ignore unknown fields, per ADR-004.",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["schemaVersion", "messageId", "sentAt", "measurements", "device"],
+  "properties": {
+    "schemaVersion": {
+      "type": "integer",
+      "const": 1,
+      "description": "Schema version. Incremented only for breaking changes."
+    },
+    "messageId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "description": "Unique per message. Used for idempotency when a message is resent."
+    },
+    "deviceId": {
+      "type": "string",
+      "maxLength": 128,
+      "description": "INFORMATIONAL. The authoritative identity is the IoT Hub system property iothub-connection-device-id. A mismatch must be logged and the message rejected."
+    },
+    "sentAt": {
+      "type": "string",
+      "format": "date-time",
+      "description": "Transmission time according to the device clock. ISO 8601 with UTC offset. May differ from IoT Hub enqueuedTime due to clock drift or buffered transmission."
+    },
+    "sequence": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Monotonically increasing per device. Gaps indicate lost messages."
+    },
+    "measurements": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 64,
+      "description": "One or more measurements. Multiple entries occur when a device transmits buffered readings after a network outage.",
+      "items": { "$ref": "#/$defs/measurement" }
+    },
+    "device": { "$ref": "#/$defs/device" }
+  },
+  "$defs": {
+    "measurement": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["type", "value", "unit", "measuredAt"],
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": ["level"],
+          "description": "Measurement type. Only 'level' in v1. Extended additively."
+        },
+        "value": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 20000,
+          "description": "Raw measured value. No conversion is performed on the device, per ADR-004."
+        },
+        "unit": {
+          "type": "string",
+          "enum": ["mm"],
+          "description": "UCUM unit code."
+        },
+        "measuredAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Time of measurement. May lie far in the past for buffered transmissions and must not be rejected on that basis."
+        },
+        "quality": {
+          "type": "string",
+          "enum": ["ok", "uncertain", "bad"],
+          "default": "ok",
+          "description": "The device's own assessment of the reading's reliability."
+        }
+      }
+    },
+    "device": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["firmware"],
+      "description": "Only fields that are operationally necessary or required by the CRA. Static attributes (model, hardware revision, ICCID) belong in the IoT Hub device twin, per CRA Annex I Part I point (g).",
+      "properties": {
+        "firmware": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 32,
+          "description": "REQUIRED. Running firmware version. Needed to identify vulnerable devices and to verify that security updates have been applied, per CRA Annex I Part II points 1, 2 and 7. Semantic versioning is recommended; the format is confirmed with the device vendor during hardware validation."
+        },
+        "battery": {
+          "type": "object",
+          "required": ["value", "unit"],
+          "additionalProperties": false,
+          "description": "Battery status. Operationally necessary for a large battery-powered fleet.",
+          "properties": {
+            "value": { "type": "number", "minimum": 0, "maximum": 10 },
+            "unit": { "type": "string", "enum": ["V"] }
+          }
+        },
+        "signal": {
+          "type": "object",
+          "additionalProperties": true,
+          "description": "NB-IoT radio diagnostics. Optional, included when the modem exposes the values. Without them, 'why did this device stop reporting' cannot be answered.",
+          "properties": {
+            "rsrp": {
+              "type": "integer",
+              "minimum": -140,
+              "maximum": -44,
+              "description": "Reference Signal Received Power, in dBm."
+            },
+            "rsrq": {
+              "type": "integer",
+              "minimum": -20,
+              "maximum": -3,
+              "description": "Reference Signal Received Quality, in dB."
+            }
+          }
+        }
+      }
+    }
+  }
+}

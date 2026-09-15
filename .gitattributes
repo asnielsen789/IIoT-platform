@@ -1,0 +1,10 @@
+# Normalise line endings to LF both in the repository AND in the working tree on all
+# platforms. Without this, core.autocrlf=true checks files out as CRLF on Windows while
+# .editorconfig declares end_of_line = lf — so `dotnet format --verify-no-changes` fails
+# in a fresh clone.
+* text=auto eol=lf
+
+# Binary files must never be touched.
+*.png  binary
+*.pdf  binary
+*.pptx binary
