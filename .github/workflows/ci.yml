@@ -42,6 +42,12 @@ jobs:
           dotnet-version: 8.0.x
           global-json-file: global.json
 
+      # Makes the resolved SDK visible in every run, so version drift is obvious.
+      - name: Show .NET SDK
+        run: |
+          dotnet --version
+          dotnet --list-sdks
+
       - name: Restore
         run: dotnet restore IIoT.slnx
 
