@@ -1,0 +1,61 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# Least privilege: the workflow only needs to read the repository.
+permissions:
+  contents: read
+
+# Cancel superseded runs on pull requests; runs on main always complete.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  DOTNET_NOLOGO: true
+  DOTNET_CLI_TELEMETRY_OPTOUT: true
+  DOTNET_SKIP_FIRST_TIME_EXPERIENCE: true
+
+jobs:
+  build:
+    name: Format, build and test
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      # Actions are pinned to full commit SHAs rather than mutable tags.
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          # SDK 10 from global.json builds the .slnx solution;
+          # the .NET 8 runtime is needed to run the net8.0 test projects.
+          dotnet-version: 8.0.x
+          global-json-file: global.json
+
+      # Makes the resolved SDK visible in every run, so version drift is obvious.
+      - name: Show .NET SDK
+        run: |
+          dotnet --version
+          dotnet --list-sdks
+
+      - name: Restore
+        run: dotnet restore IIoT.slnx
+
+      - name: Verify formatting
+        run: dotnet format IIoT.slnx --verify-no-changes --no-restore
+
+      - name: Build
+        run: dotnet build IIoT.slnx --no-restore --configuration Release
+
+      - name: Test
+        run: dotnet test IIoT.slnx --no-build --configuration Release
