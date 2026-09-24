@@ -1,0 +1,16 @@
+<Project>
+
+  <!--
+    Azure.Functions.Sdk generates an extensions project via a post-restore hook that only runs
+    when the Functions project is restored directly. Restoring the solution skips it, which
+    triggers warning AZFW0108 and falls back to restoring during build. This target walks
+    ProjectReference items so the hook runs as part of `dotnet restore IIoT.slnx`.
+  -->
+  <Target Name="_RecursiveGenerateFunctionsExtensionProject" AfterTargets="Restore">
+    <MSBuild Projects="@(ProjectReference)" Targets="_RecursiveGenerateFunctionsExtensionProject"
+      SkipNonexistentProjects="true" SkipNonexistentTargets="true" />
+    <MSBuild Projects="@(ProjectReference)" Targets="GenerateFunctionsExtensionProject"
+      SkipNonexistentProjects="true" SkipNonexistentTargets="true" />
+  </Target>
+
+</Project>

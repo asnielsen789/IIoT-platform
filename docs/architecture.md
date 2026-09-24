@@ -44,7 +44,7 @@ graph TB
 
         keyvault["Azure Key Vault<br/>---<br/>X.509 certificates (CA),<br/>secrets, connection strings"]
 
-        function["Azure Function<br/>(.NET 8 / C#)<br/>---<br/>Message processing,<br/>transformation,<br/>downstream routing"]
+        function["Azure Function<br/>(.NET 10 / C#)<br/>---<br/>Message processing,<br/>transformation,<br/>downstream routing"]
 
         apim["Azure APIM<br/>(optional)<br/>---<br/>Rate limiting,<br/>API versioning,<br/>request logging"]
 
