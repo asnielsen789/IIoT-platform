@@ -22,3 +22,4 @@ GitHub issue and removed from this list, so the two never overlap.
 | B3 | API: device fleet status | feature | Endpoint returning an overview of connected devices, latest reading, certificate expiry. |
 | B4 | Automatic certificate renewal | feature | Key Vault-based rotation of device certificates without downtime. |
 | B5 | OTA firmware updates | feature | Firmware distribution via IoT Hub. |
+| B6 | `IIoT.Contracts` NuGet package | feature | Extract interfaces and models from `IIoT.Core` so external parties can reference them independently. |
