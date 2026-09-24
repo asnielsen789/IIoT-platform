@@ -21,7 +21,7 @@ Aug              Sep              Oct              Nov
 Purpose: establish the project foundation so the first iteration can start cleanly.
 
 - [x] Initial scoping — boundaries and architecture
-- [x] Project context and technology choices documented (C#/.NET 8, GitHub Actions)
+- [x] Project context and technology choices documented (C#/.NET 10, GitHub Actions)
 - [x] Backlog created with prioritised features
 - [x] MQTT payload contract defined
 - [ ] Provision an Azure subscription for development
