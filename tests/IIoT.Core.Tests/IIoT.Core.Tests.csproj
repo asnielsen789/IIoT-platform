@@ -17,6 +17,17 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!--
+      The contract's example payloads are the test data. They are linked from docs/ rather than
+      duplicated, so adding a fixture there adds a test case here automatically and the two can
+      never disagree about what a valid message looks like.
+    -->
+    <Content Include="..\..\docs\schemas\examples\*.json"
+      Link="Fixtures\%(Filename)%(Extension)"
+      CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\..\src\IIoT.Core\IIoT.Core.csproj" />
   </ItemGroup>
 
