@@ -26,8 +26,10 @@ Purpose: establish the project foundation so the first iteration can start clean
 - [x] MQTT payload contract defined
 - [ ] Provision an Azure subscription for development
 - [ ] Azure resources provisioned via IaC (Bicep): IoT Hub, Key Vault, Function App
-- [ ] CI/CD pipeline (GitHub Actions: format → build → test → deploy)
-- [ ] AI code review and security review integrated into CI
+- [x] CI: format → build → test on pull requests and pushes to `main` — [#3](https://github.com/asnielsen789/IIoT-platform/issues/3)
+- [ ] CI: branch protection requiring the check before merge — [#3](https://github.com/asnielsen789/IIoT-platform/issues/3)
+- [ ] CD: deploy to Azure — [#5](https://github.com/asnielsen789/IIoT-platform/issues/5)
+- [ ] AI code review and security review integrated into CI — [#6](https://github.com/asnielsen789/IIoT-platform/issues/6)
 - [ ] GitHub Projects integrated with CI/CD (issue linking, automatic status updates)
 
 ---
@@ -76,14 +78,9 @@ Purpose: establish the project foundation so the first iteration can start clean
 
 ## Backlog (unprioritised)
 
-Features that may enter an iteration if capacity or need arises:
-
-- [ ] OTA firmware updates via IoT Hub
-- [ ] `GatewayV2Forwarder` (adapter for the next gateway format version, once a specification exists)
-- [ ] Device twin state management
-- [ ] API for device fleet status
-- [ ] Automatic certificate renewal
-- [ ] `IIoT.Contracts` NuGet package — extract interfaces and models from Core so external parties can reference them independently
+Features that may enter an iteration if capacity or need arises are listed once, in
+[`issues.md`](issues.md#backlog-unprioritised). A second copy here is what allowed an item to
+drift between the two lists.
 
 ---
 
