@@ -27,7 +27,7 @@ Purpose: establish the project foundation so the first iteration can start clean
 - [ ] Provision an Azure subscription for development
 - [ ] Azure resources provisioned via IaC (Bicep): IoT Hub, Key Vault, Function App
 - [x] CI: format → build → test on pull requests and pushes to `main` — [#3](https://github.com/asnielsen789/IIoT-platform/issues/3)
-- [ ] CI: branch protection requiring the check before merge — [#3](https://github.com/asnielsen789/IIoT-platform/issues/3)
+- [x] CI: branch protection requiring the check before merge — [#3](https://github.com/asnielsen789/IIoT-platform/issues/3)
 - [ ] CD: deploy to Azure — [#5](https://github.com/asnielsen789/IIoT-platform/issues/5)
 - [ ] AI code review and security review integrated into CI — [#6](https://github.com/asnielsen789/IIoT-platform/issues/6)
 - [ ] GitHub Projects integrated with CI/CD (issue linking, automatic status updates)
