@@ -1,0 +1,71 @@
+# Dependabot version updates.
+#
+# Keeps third-party code current so that known vulnerabilities are noticed and fixed
+# rather than accumulating silently. This is the "handle vulnerabilities" half of the
+# CRA Annex I Part II obligations; the SBOM workflow is the "document components" half.
+#
+# Two ecosystems are watched: the NuGet packages the solution consumes, and the GitHub
+# Actions used by the workflows. The actions are pinned to full commit SHAs, which is
+# immutable and therefore also invisible to a human reader — Dependabot is what makes
+# those pins reviewable instead of frozen.
+
+version: 2
+
+updates:
+  # --- NuGet -----------------------------------------------------------------------
+  #
+  # Directories are listed per project rather than as a single "/" entry. The solution
+  # file is IIoT.slnx, the XML solution format, and every project lives in its own
+  # subdirectory; a root-only entry would depend on Dependabot discovering projects
+  # through the .slnx, which is newer than its NuGet manifest discovery. Listing the
+  # four project directories removes that assumption. Directory.Build.props at the root
+  # sets properties only and declares no PackageReference, so it needs no entry.
+  #
+  # A new project must be added here.
+  - package-ecosystem: nuget
+    directories:
+      - "/src/IIoT.Core"
+      - "/src/IIoT.Functions"
+      - "/tests/IIoT.Core.Tests"
+      - "/tests/IIoT.Integration.Tests"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: Europe/Copenhagen
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: chore
+      include: scope
+    groups:
+      # Minor and patch updates are collected into one pull request per week. They are
+      # almost always safe and individually uninteresting, and one green CI run over the
+      # whole batch is better evidence than ten runs over one package each.
+      nuget-minor-and-patch:
+        patterns:
+          - "*"
+        update-types:
+          - minor
+          - patch
+    # Major updates are deliberately left out of the group above, so each arrives as its
+    # own pull request. A major is a breaking change and deserves to be read.
+
+  # --- GitHub Actions --------------------------------------------------------------
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: Europe/Copenhagen
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: ci
+      include: scope
+    groups:
+      actions-minor-and-patch:
+        patterns:
+          - "*"
+        update-types:
+          - minor
+          - patch
