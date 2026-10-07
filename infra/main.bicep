@@ -1,0 +1,198 @@
+// Entry point for the platform's Azure infrastructure (#2).
+//
+// Subscription-scoped: it creates the resource group and deploys every module into it, so one
+// `az deployment sub what-if` shows the whole plan. See README.md for usage and design notes.
+targetScope = 'subscription'
+
+@description('Environment name, used in resource names and tags. Lowercase letters and digits; at most 7 characters, which keeps the Key Vault name within its 24-character limit.')
+@minLength(2)
+@maxLength(7)
+param environmentName string
+
+@description('Azure region for every resource. Only regions that have been checked for IoT Hub and Flex Consumption support are allowed; each needs an entry in regionAbbreviations.')
+@allowed([
+  'westeurope'
+])
+param location string
+
+@description('IoT Hub SKU. F1 is free but limited to one per subscription, and cannot be upgraded to B or S in place: leaving F1 means creating a new hub. Basic tiers are not offered: they lack cloud-to-device messaging, which the planned device configuration (#16) depends on.')
+@allowed([
+  'F1'
+  'S1'
+  'S2'
+  'S3'
+])
+param iotHubSkuName string = 'F1'
+
+@description('Upper bound on Function App instances. Caps runaway cost; at 2048 MB each instance also takes one core of the regional Flex Consumption quota.')
+@minValue(1)
+@maxValue(1000)
+param functionAppMaximumInstanceCount int = 10
+
+var workload = 'iiot'
+
+// Region short codes for resource names. To add a region, check that it offers both IoT Hub
+// and Flex Consumption (`az functionapp list-flexconsumption-locations`), then add it here and
+// to the allowed values of `location`.
+var regionAbbreviations = {
+  westeurope: 'weu'
+}
+
+// <workload>-<environment>-<region>, for example iiot-staging-weu.
+var nameStem = toLower('${workload}-${environmentName}-${regionAbbreviations[location]}')
+
+// Four of the resources have globally unique DNS names (IoT Hub, Function App, Key Vault,
+// storage account). They get a short suffix that is deterministic per subscription and
+// environment, so redeploying finds the same resources. Four characters keep the Key Vault
+// name within 24.
+var uniqueSuffix = take(uniqueString(subscription().subscriptionId, environmentName), 4)
+
+// Every name is fixed here, before deployment, from Cloud Adoption Framework abbreviations.
+// Modules receive names rather than other modules' outputs wherever a name identifies a
+// resource, so that what-if can evaluate the whole plan.
+var names = {
+  resourceGroup: 'rg-${nameStem}'
+  identity: 'id-${nameStem}'
+  logAnalytics: 'log-${nameStem}'
+  applicationInsights: 'appi-${nameStem}'
+  storageAccount: 'st${replace(nameStem, '-', '')}${uniqueSuffix}'
+  keyVault: 'kv-${nameStem}-${uniqueSuffix}'
+  iotHub: 'iot-${nameStem}-${uniqueSuffix}'
+  functionPlan: 'asp-${nameStem}'
+  functionApp: 'func-${nameStem}-${uniqueSuffix}'
+}
+
+var tags = {
+  workload: workload
+  environment: environmentName
+  'managed-by': 'bicep'
+}
+
+// The Function's dedicated, ServiceConnect-only IoT Hub policy, and the Key Vault secret that
+// holds the connection string built from it (ADR-007).
+var telemetryReaderPolicyName = 'function-telemetry-reader'
+var telemetryConnectionSecretName = 'iothub-telemetry-connection'
+
+resource rg 'Microsoft.Resources/resourceGroups@2025-04-01' = {
+  name: names.resourceGroup
+  location: location
+  tags: tags
+}
+
+module identity 'modules/identity.bicep' = {
+  scope: rg
+  params: {
+    name: names.identity
+    location: location
+    tags: tags
+  }
+}
+
+module monitoring 'modules/monitoring.bicep' = {
+  scope: rg
+  params: {
+    logAnalyticsName: names.logAnalytics
+    applicationInsightsName: names.applicationInsights
+    location: location
+    tags: tags
+  }
+}
+
+module storage 'modules/storage.bicep' = {
+  scope: rg
+  params: {
+    name: names.storageAccount
+    location: location
+    tags: tags
+    // The account serves this one app, so a fixed container name is enough.
+    deploymentContainerName: 'app-package'
+    functionIdentityName: names.identity
+  }
+  dependsOn: [
+    identity
+  ]
+}
+
+module keyVault 'modules/key-vault.bicep' = {
+  scope: rg
+  params: {
+    name: names.keyVault
+    location: location
+    tags: tags
+    functionIdentityName: names.identity
+  }
+  dependsOn: [
+    identity
+  ]
+}
+
+module iotHub 'modules/iot-hub.bicep' = {
+  scope: rg
+  params: {
+    name: names.iotHub
+    location: location
+    tags: tags
+    skuName: iotHubSkuName
+    telemetryReaderPolicyName: telemetryReaderPolicyName
+  }
+}
+
+module iotHubConnectionSecret 'modules/iot-hub-connection-secret.bicep' = {
+  scope: rg
+  params: {
+    iotHubName: names.iotHub
+    policyName: telemetryReaderPolicyName
+    keyVaultName: names.keyVault
+    secretName: telemetryConnectionSecretName
+    tags: tags
+  }
+  dependsOn: [
+    iotHub
+    keyVault
+  ]
+}
+
+// Created last. Through the module outputs it consumes and the explicit dependency on
+// monitoring, the app comes into being only after its identity, its role assignments (in the
+// storage and Key Vault modules) and the secret it references all exist.
+module functionApp 'modules/function-app.bicep' = {
+  scope: rg
+  params: {
+    name: names.functionApp
+    planName: names.functionPlan
+    location: location
+    tags: tags
+    identityId: identity.outputs.id
+    identityClientId: identity.outputs.clientId
+    storageAccountName: names.storageAccount
+    storageBlobEndpoint: storage.outputs.blobEndpoint
+    deploymentContainerName: storage.outputs.deploymentContainerName
+    applicationInsightsName: names.applicationInsights
+    iotHubConnectionSecretUri: iotHubConnectionSecret.outputs.secretUri
+    maximumInstanceCount: functionAppMaximumInstanceCount
+  }
+  dependsOn: [
+    monitoring
+  ]
+}
+
+@description('Resource group holding every resource.')
+output resourceGroupName string = rg.name
+
+@description('Function App name, for deploying the app package.')
+output functionAppName string = functionApp.outputs.name
+
+@description('IoT Hub name.')
+output iotHubName string = iotHub.outputs.name
+
+@description('IoT Hub host name devices connect to.')
+output iotHubHostName string = iotHub.outputs.hostName
+
+@description('Key Vault name.')
+output keyVaultName string = keyVault.outputs.name
+
+@description('Storage account name.')
+output storageAccountName string = storage.outputs.name
+
+@description('Application Insights name.')
+output applicationInsightsName string = monitoring.outputs.applicationInsightsName
