@@ -12,3 +12,4 @@ Documents the architectural decisions made in this project. Each ADR describes c
 | [004](adr-004-message-format.md) | Message format and versioning for sensor telemetry | Accepted | 2026-09-14 |
 | [005](adr-005-scope-generalisation.md) | Generalisation of project scope | Accepted | 2026-09-14 |
 | [006](adr-006-target-net10.md) | Target .NET 10 | Accepted | 2026-09-24 |
+| [007](adr-007-telemetry-stream-access.md) | Function access to the telemetry stream | Accepted | 2026-10-07 |
