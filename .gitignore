@@ -58,3 +58,9 @@ CodeCoverage/
 *.VisualState.xml
 TestResult.xml
 nunit-*.xml
+
+# MQTT test client device credentials — see tools/IIoT.TestClient/README.md.
+# An IoT Hub device key is a symmetric credential, but it is indistinguishable from
+# any other base64 string, so secret scanning and push protection will not catch it.
+# The README points at a path outside the repo; this is the guard if one lands inside.
+*devices*.json

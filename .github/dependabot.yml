@@ -18,7 +18,7 @@ updates:
   # file is IIoT.slnx, the XML solution format, and every project lives in its own
   # subdirectory; a root-only entry would depend on Dependabot discovering projects
   # through the .slnx, which is newer than its NuGet manifest discovery. Listing the
-  # four project directories removes that assumption. Directory.Build.props at the root
+  # project directories removes that assumption. Directory.Build.props at the root
   # sets properties only and declares no PackageReference, so it needs no entry.
   #
   # A new project must be added here.
@@ -28,6 +28,8 @@ updates:
       - "/src/IIoT.Functions"
       - "/tests/IIoT.Core.Tests"
       - "/tests/IIoT.Integration.Tests"
+      - "/tests/IIoT.TestClient.Tests"
+      - "/tools/IIoT.TestClient"
     schedule:
       interval: weekly
       day: monday

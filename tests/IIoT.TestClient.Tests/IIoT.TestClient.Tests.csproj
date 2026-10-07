@@ -1,0 +1,42 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+    <RootNamespace>IIoT.TestClient.Tests</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="coverlet.collector" Version="10.0.1" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="18.10.1" />
+    <PackageReference Include="xunit" Version="2.9.3" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="4.0.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Using Include="Xunit" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!--
+      The same fixtures the client sends, linked the same way, so the tests read the contract's
+      bytes rather than a copy of them.
+    -->
+    <Content Include="..\..\docs\schemas\examples\*.json"
+      Link="Fixtures\%(Filename)%(Extension)"
+      CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\tools\IIoT.TestClient\IIoT.TestClient.csproj" />
+
+    <!--
+      The client must not reference IIoT.Core — see TelemetryFixture — but the tests must. Running
+      a mutated payload through the platform's own TelemetryValidator is the one check that proves
+      the client and the Azure Function agree about the contract rather than merely agreeing with
+      each other.
+    -->
+    <ProjectReference Include="..\..\src\IIoT.Core\IIoT.Core.csproj" />
+  </ItemGroup>
+
+</Project>

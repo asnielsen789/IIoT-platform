@@ -1,0 +1,32 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <IsPackable>false</IsPackable>
+    <RootNamespace>IIoT.TestClient</RootNamespace>
+    <AssemblyName>IIoT.TestClient</AssemblyName>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!--
+      Raw MQTT, deliberately: this project stands in for device firmware speaking MQTT through a
+      modem stack, not for an application using the Azure IoT device SDK. The SDK sets contentType
+      and contentEncoding on its own, so a client built on it would prove nothing about whether the
+      topic string in docs/mqtt-payload.md is correct — and that string is what this client exists
+      to verify. See https://github.com/asnielsen789/IIoT-platform/issues/8.
+    -->
+    <PackageReference Include="MQTTnet" Version="5.2.0.1603" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!--
+      The contract's example payloads are the data this client sends. They are linked from docs/
+      rather than duplicated, and copied to the output directory so nothing is read from a source
+      path at runtime. The fixture bytes are replayed as-is; see TelemetryFixtures.
+    -->
+    <Content Include="..\..\docs\schemas\examples\*.json"
+      Link="Fixtures\%(Filename)%(Extension)"
+      CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+</Project>
