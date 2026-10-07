@@ -1,0 +1,141 @@
+name: SBOM
+
+# Software Bill of Materials generation (CycloneDX).
+#
+# Why this exists, concretely:
+#
+#   CRA Annex I, Part II, point 1 requires manufacturers to "identify and document
+#   vulnerabilities and components contained in products with digital elements, including
+#   by drawing up a software bill of materials in a commonly used and machine-readable
+#   format covering at the very least the top-level dependencies of the product".
+#
+# This workflow is the evidence for that clause, not a promise to produce it later. Every
+# commit that reaches main leaves behind a downloadable, machine-readable CycloneDX
+# document naming the components that commit is built from. CycloneDX is an ECMA standard
+# (ECMA-424) and one of the two formats regulators and tooling treat as "commonly used",
+# alongside SPDX.
+#
+# Dependabot (.github/dependabot.yml) is the other half of the same obligation: this
+# workflow documents the components, Dependabot handles the vulnerabilities in them.
+#
+# The check this workflow publishes is advisory. Branch protection on main requires only
+# `Format, build and test` from ci.yml.
+
+on:
+  push:
+    branches: [main]
+  # Pull requests generate an SBOM too. Not because the artifact itself is interesting on
+  # a branch, but because the generation is a build step like any other and will break
+  # like one — a new project, a renamed directory or an SDK bump can stop it working.
+  # Finding that out on the pull request is cheap; finding out on main means main has no
+  # current SBOM until someone notices.
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+# Least privilege: the workflow reads the sources and writes nothing back to the
+# repository. The SBOM leaves as a build artifact, which needs no extra permission.
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  DOTNET_NOLOGO: true
+  DOTNET_CLI_TELEMETRY_OPTOUT: true
+  DOTNET_SKIP_FIRST_TIME_EXPERIENCE: true
+  # The CycloneDX .NET tool version is pinned, for the same reason the actions are pinned
+  # to SHAs: the SBOM is a record, and a record produced by an unknown generator version
+  # is weaker evidence. Dependabot does not watch .NET global tools, so this line is
+  # bumped by hand.
+  CYCLONEDX_TOOL_VERSION: 6.2.0
+
+jobs:
+  sbom:
+    name: Generate CycloneDX SBOM
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      # Actions are pinned to full commit SHAs rather than mutable tags.
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          # Same pinned SDK as ci.yml. The SBOM must describe the dependency graph the
+          # product is actually restored from, and that graph is SDK-dependent.
+          global-json-file: global.json
+
+      # The CycloneDX .NET global tool, not a third-party GitHub Action wrapper.
+      #
+      # CycloneDX/cyclonedx-dotnet is the upstream generator; the published actions around
+      # it are thin shells that install and invoke this same tool. Using the tool directly
+      # means one dependency to pin and trust instead of two, an exact version from NuGet
+      # rather than a tag on a wrapper, and the generator running under the SDK that
+      # global.json pins instead of whatever the wrapper image ships.
+      - name: Install CycloneDX tool
+        run: |
+          dotnet tool install --global CycloneDX --version "$CYCLONEDX_TOOL_VERSION"
+          echo "$HOME/.dotnet/tools" >> "$GITHUB_PATH"
+
+      # Solution-level restore first. src/IIoT.Functions uses the Azure.Functions.Sdk
+      # project SDK, whose post-restore hook generates an extensions project; the hook is
+      # wired up by Directory.Solution.targets and therefore only runs when the solution
+      # is restored. Restoring here means the project assets the generator reads are
+      # complete and AZFW0108 does not appear.
+      - name: Restore
+        run: dotnet restore IIoT.slnx
+
+      # --exclude-test-projects: the SBOM describes the product, and tests/ is never
+      #   shipped. xUnit, Moq and Testcontainers are build-time tooling, not components
+      #   contained in a product with digital elements. Dependabot still watches those
+      #   packages, so excluding them here loses no vulnerability coverage.
+      # --set-version: the component version is the commit SHA, which makes the document
+      #   traceable to an exact source state. The tool otherwise stamps 0.0.0, and an SBOM
+      #   that cannot be tied to a revision is not evidence of anything.
+      - name: Generate SBOM
+        run: |
+          dotnet CycloneDX IIoT.slnx \
+            --output sbom \
+            --filename iiot-platform.cdx.json \
+            --output-format json \
+            --exclude-test-projects \
+            --set-name IIoT-platform \
+            --set-version "${{ github.sha }}"
+
+      # A short, human-readable summary in the run page, so the SBOM is checkable without
+      # downloading and reading JSON.
+      - name: Summarise SBOM
+        run: |
+          file=sbom/iiot-platform.cdx.json
+          {
+            echo "### CycloneDX SBOM"
+            echo
+            echo "- Spec version: \`$(jq -r '.specVersion' "$file")\`"
+            echo "- Serial number: \`$(jq -r '.serialNumber' "$file")\`"
+            echo "- Components: **$(jq '.components | length' "$file")**"
+            echo "- Commit: \`${{ github.sha }}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload SBOM
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: sbom-cyclonedx-${{ github.sha }}
+          path: sbom/iiot-platform.cdx.json
+          # A missing file here must fail the run. A green SBOM job with no SBOM in it is
+          # worse than a red one.
+          if-no-files-found: error
+          # 90 days is the ceiling GitHub allows for public repositories, so main keeps
+          # its SBOMs for as long as artifacts can be kept. Pull request runs exist to
+          # prove the step still works, not to be archived, so they expire quickly.
+          #
+          # 90 days is not a retention policy for CRA purposes. When the project starts
+          # cutting releases, the release SBOM belongs on the release itself, which does
+          # not expire; artifact retention is the interim measure until then.
+          retention-days: ${{ github.event_name == 'pull_request' && 7 || 90 }}
