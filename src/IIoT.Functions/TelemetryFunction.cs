@@ -6,9 +6,10 @@ using Microsoft.Extensions.Logging;
 namespace IIoT.Functions;
 
 /// <summary>
-/// The IoT Hub entry point. Kept deliberately thin: it extracts the authenticated identity from
-/// the transport and delegates every decision to <see cref="TelemetryService"/>, which has no
-/// Azure dependency and is therefore testable without one.
+/// The IoT Hub entry point. Kept deliberately thin: it extracts the authenticated identity and
+/// the enqueued time from the transport and delegates every decision to
+/// <see cref="TelemetryService"/>, which has no Azure dependency and is therefore testable
+/// without one.
 /// </summary>
 public sealed class TelemetryFunction
 {
@@ -37,7 +38,13 @@ public sealed class TelemetryFunction
         var authenticatedDeviceId = ReadAuthenticatedDeviceId(eventData);
         var payload = eventData.EventBody.ToString();
 
-        var outcome = await _telemetryService.ProcessAsync(payload, authenticatedDeviceId, context.CancellationToken);
+        // Stamped by IoT Hub when it accepted the message, so it is platform time rather than
+        // device time. Downstream it becomes the receipt time; the device's own sentAt and
+        // measuredAt are not trustworthy as absolute time (section 4 of the contract).
+        var enqueuedAt = eventData.EnqueuedTime;
+
+        var outcome = await _telemetryService.ProcessAsync(
+            payload, authenticatedDeviceId, enqueuedAt, context.CancellationToken);
 
         // The message is never re-thrown on rejection. A payload that fails validation will fail
         // identically on every retry, so throwing would only block the partition until the

@@ -1,4 +1,5 @@
 using IIoT.Core.Interfaces;
+using IIoT.Core.Models;
 using IIoT.Core.Validation;
 using Microsoft.Extensions.Logging;
 
@@ -9,8 +10,9 @@ namespace IIoT.Core.Services;
 /// from, and hands it to the forwarder.
 /// </summary>
 /// <remarks>
-/// Deliberately free of any Azure dependency: the transport hands in the payload and the
-/// authenticated identity, so the whole decision path is unit-testable without a cloud.
+/// Deliberately free of any Azure dependency: the transport hands in the payload, the
+/// authenticated identity and the enqueued time, so the whole decision path is unit-testable
+/// without a cloud.
 /// </remarks>
 public sealed class TelemetryService
 {
@@ -30,9 +32,14 @@ public sealed class TelemetryService
     /// it the authoritative identity. <c>null</c> means it was absent, and the message is
     /// rejected rather than processed under an unknown identity.
     /// </param>
+    /// <param name="enqueuedAt">
+    /// When IoT Hub accepted the message. Passed through to the forwarder as the receipt time,
+    /// because unlike the device's own timestamps it comes from the platform's clock.
+    /// </param>
     public async Task<ProcessingOutcome> ProcessAsync(
         string payload,
         string? authenticatedDeviceId,
+        DateTimeOffset enqueuedAt,
         CancellationToken cancellationToken = default)
     {
         var result = TelemetryValidator.Validate(payload);
@@ -91,7 +98,12 @@ public sealed class TelemetryService
                 measurement.Quality);
         }
 
-        await _forwarder.ForwardAsync(message, cancellationToken);
+        // From here on the identity is the authenticated one. The context is built only after
+        // the cross-check above, so a forwarder can never be handed an identity that was not
+        // proven, and it never needs to look at the payload's deviceId at all.
+        var context = new ForwardingContext(authenticatedDeviceId, enqueuedAt);
+
+        await _forwarder.ForwardAsync(message, context, cancellationToken);
         return ProcessingOutcome.Forwarded;
     }
 }

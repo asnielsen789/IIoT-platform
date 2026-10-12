@@ -23,12 +23,16 @@ public sealed class GatewayV1Forwarder : IDataForwarder
         _logger = logger;
     }
 
-    public async Task ForwardAsync(TelemetryMessage message, CancellationToken cancellationToken = default)
+    public async Task ForwardAsync(
+        TelemetryMessage message,
+        ForwardingContext context,
+        CancellationToken cancellationToken = default)
     {
         // TODO: implement the downstream call once the gateway interface is specified.
         _logger.LogInformation(
-            "Forwarding message {MessageId} with {MeasurementCount} measurement(s) to gateway v1",
+            "Forwarding message {MessageId} from {DeviceId} with {MeasurementCount} measurement(s) to gateway v1",
             message.MessageId,
+            context.AuthenticatedDeviceId,
             message.Measurements.Count);
 
         await Task.CompletedTask;
