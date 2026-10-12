@@ -92,3 +92,27 @@ reference, and gives up the one place where the secret is controlled and audited
 - [Control access with shared access signatures — Azure IoT Hub](https://learn.microsoft.com/en-us/azure/iot-hub/authenticate-authorize-sas) — what `ServiceConnect` grants
 - Azure Retail Prices API — Event Hubs, Basic tier, West Europe
 - [ADR-006](adr-006-target-net10.md) — Flex Consumption hosting
+
+## Update (2026-10-12): findings from #2
+
+Writing the infrastructure in #2 showed that two consequences above were incomplete. The
+decision itself stands.
+
+- **Keys rotate on every deployment, not only when regenerated.** The template declares the
+  hub's shared access policies without keys, which is correct: no key is ever written into a
+  template. But the IoT Hub API treats properties missing from an update as defaults — its
+  reference warns that missing properties *"may cause these values to fallback to default"*,
+  and the maintainers of the Terraform provider, investigating the same behaviour, found that
+  the API then *"would always generate new primary key and secondary key"*. Every deployment
+  therefore rotates every policy key. The template rewrites the Key Vault secret in the same
+  deployment, but a running Function App keeps the value its Key Vault reference resolved
+  until a configuration change, an explicit refresh, or the platform's periodic refresh. Every
+  deployment must therefore be followed by a forced refresh of the Function App's Key Vault
+  references: a step for the deployment procedure in #9 and the pipeline in #5. Rotation is
+  thereby automatic rather than manual. Device keys are unaffected; they belong to device
+  identities, not to hub-level policies.
+- **A Key Vault reference used by a trigger on Flex Consumption is unconfirmed.** No official
+  documentation confirms or rules it out. A Microsoft Q&A answer from February 2026 describes a
+  known limitation for Python apps, where the trigger reads its connection setting before the
+  reference has resolved. This Function is .NET. The first deployment in #9 verifies it; if it
+  fails, options 2 and 3 above remain the alternatives.
