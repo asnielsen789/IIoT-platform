@@ -13,6 +13,14 @@
 
   <ItemGroup>
     <!--
+      Lets the integration tests exercise the configuration validator directly. Asserting its
+      reasons through a started host is racy; see GatewayMockStartupTests.
+    -->
+    <InternalsVisibleTo Include="IIoT.Integration.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!--
       The mock validates against the published contract, linked in from docs/ rather than copied,
       so the document it enforces and the document the contract publishes are the same bytes.
 
