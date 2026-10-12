@@ -52,7 +52,7 @@ az bicep build-params --file infra/environments/staging.bicepparam
 
 # Preview the whole plan against the subscription
 az deployment sub what-if \
-  --location westeurope \
+  --location northeurope \
   --template-file infra/main.bicep \
   --parameters infra/environments/staging.bicepparam
 ```
@@ -64,27 +64,34 @@ requests or commits.
 ## Naming
 
 Names follow the Cloud Adoption Framework abbreviations:
-`<abbreviation>-<workload>-<environment>-<region>`, with workload `iiot` and region code `weu`
-for West Europe. The four resources whose names are global DNS names also get a four-character
+`<abbreviation>-<workload>-<environment>-<region>`, with workload `iiot` and region code `neu`
+for North Europe. The four resources whose names are global DNS names also get a four-character
 suffix, written `xxxx` below. It comes from `uniqueString()` over the subscription ID and the
 environment name, so it is stable across redeployments and differs between subscriptions.
 
 | Resource | Name in `staging` |
 |---|---|
-| Resource group | `rg-iiot-staging-weu` |
-| Managed identity | `id-iiot-staging-weu` |
-| Log Analytics workspace | `log-iiot-staging-weu` |
-| Application Insights | `appi-iiot-staging-weu` |
-| Storage account | `stiiotstagingweuxxxx` (storage names allow no hyphens) |
-| Key Vault | `kv-iiot-staging-weu-xxxx` |
-| IoT Hub | `iot-iiot-staging-weu-xxxx` |
-| Flex Consumption plan | `asp-iiot-staging-weu` |
-| Function App | `func-iiot-staging-weu-xxxx` |
+| Resource group | `rg-iiot-staging-neu` |
+| Managed identity | `id-iiot-staging-neu` |
+| Log Analytics workspace | `log-iiot-staging-neu` |
+| Application Insights | `appi-iiot-staging-neu` |
+| Storage account | `stiiotstagingneuxxxx` (storage names allow no hyphens) |
+| Key Vault | `kv-iiot-staging-neu-xxxx` |
+| IoT Hub | `iot-iiot-staging-neu-xxxx` |
+| Flex Consumption plan | `asp-iiot-staging-neu` |
+| Function App | `func-iiot-staging-neu-xxxx` |
 
 Key Vault names are limited to 24 characters, which is why the environment name is limited to
 seven. Every resource carries the tags `workload`, `environment` and `managed-by: bicep`.
 
 ## Design notes
+
+### Region: North Europe
+
+West Europe offers everything this platform needs, but Azure currently closes it to tenants that
+have no resources there yet ([region access policy](https://learn.microsoft.com/azure/azure-resource-manager/troubleshooting/error-region-access-policy)):
+a what-if there fails with `RequestDisallowedByAzure`. Sweden Central does not offer IoT Hub.
+North Europe offers IoT Hub and Flex Consumption with .NET 10, and keeps the platform in the EU.
 
 ### Hosting: Flex Consumption
 

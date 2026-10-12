@@ -11,7 +11,7 @@ param environmentName string
 
 @description('Azure region for every resource. Only regions that have been checked for IoT Hub and Flex Consumption support are allowed; each needs an entry in regionAbbreviations.')
 @allowed([
-  'westeurope'
+  'northeurope'
 ])
 param location string
 
@@ -33,12 +33,13 @@ var workload = 'iiot'
 
 // Region short codes for resource names. To add a region, check that it offers both IoT Hub
 // and Flex Consumption (`az functionapp list-flexconsumption-locations`), then add it here and
-// to the allowed values of `location`.
+// to the allowed values of `location`. West Europe offers both but is closed to tenants without
+// existing resources there (https://aka.ms/locationineligible), so it is not listed.
 var regionAbbreviations = {
-  westeurope: 'weu'
+  northeurope: 'neu'
 }
 
-// <workload>-<environment>-<region>, for example iiot-staging-weu.
+// <workload>-<environment>-<region>, for example iiot-staging-neu.
 var nameStem = toLower('${workload}-${environmentName}-${regionAbbreviations[location]}')
 
 // Four of the resources have globally unique DNS names (IoT Hub, Function App, Key Vault,

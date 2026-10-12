@@ -4,8 +4,10 @@ using '../main.bicep'
 
 param environmentName = 'staging'
 
-// West Europe: IoT Hub is not offered in Sweden Central.
-param location = 'westeurope'
+// North Europe. West Europe is closed to tenants that have no resources there yet (Azure's
+// region access policy, https://aka.ms/locationineligible), and Sweden Central does not
+// offer IoT Hub.
+param location = 'northeurope'
 
 // Free tier. One per subscription; cannot be upgraded to a paid tier in place.
 param iotHubSkuName = 'F1'
