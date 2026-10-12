@@ -16,6 +16,7 @@ message schema upward, and avoids vendor lock-in where open standards exist.
 |---|---|
 | [Architecture](docs/architecture.md) | C4 diagrams, component responsibilities, sequence flows |
 | [MQTT payload contract](docs/mqtt-payload.md) | Message format, trust model, CRA mapping, evolution rules |
+| [Gateway contract](docs/gateway-contract.md) | What the platform delivers downstream: endpoint, idempotency, authentication, evolution rules |
 | [Roadmap](docs/roadmap.md) | Iterations, dependencies, risks |
 | [Architecture decisions](docs/adr/README.md) | ADRs with context, options and rationale |
 

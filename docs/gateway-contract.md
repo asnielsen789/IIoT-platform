@@ -211,3 +211,56 @@ interpretable without the URL it was posted to.
 Both sides are tested against these and against the schema itself: the gateway mock must accept
 every `valid-` example and reject every `invalid-` one with a reason, and every body the forwarder
 produces from the device contract's examples must validate against the same schema.
+
+---
+
+## 9. The platform's side
+
+The sender is `GatewayV1Forwarder` in `src/IIoT.Core/Forwarders/`, a typed HTTP client registered
+by `AddTelemetryForwarding` in `src/IIoT.Functions/`.
+
+| Concern | Behaviour |
+|---------|-----------|
+| Batching | One request per device message, every reading included (ADR-004). |
+| Identity and time | `deviceId` and `receivedAt` come from what the platform authenticated and when IoT Hub enqueued the message — never from the payload. |
+| Transport | HTTPS only; a plain-HTTP gateway address is refused before a token is even requested. Loopback is the only exception. |
+| Retries | `408`, `429`, `5xx`, network errors and timeouts are retried with exponential backoff and jitter, honouring `Retry-After`: the standard pipeline from `Microsoft.Extensions.Http.Resilience` — three retries, 10 seconds per attempt, 30 seconds in total by default. Any other `4xx` is never retried. |
+| Token | Obtained with the client credentials grant, cached, and renewed five minutes before expiry (at most half its lifetime). Concurrent messages share one refresh. On a `401` the cached token is discarded, so the next message gets a new one. |
+| Failure | The message ends as `ProcessingOutcome.ForwardingFailed`, logged at error level with the message id, the device and the reason. |
+
+> **A message that fails to forward is currently lost.** Nothing downstream has it and the
+> platform does not keep it; the log line is the only record. Durable dead-lettering is
+> [#19](https://github.com/asnielsen789/IIoT-platform/issues/19).
+
+### Configuration
+
+App settings, with `__` between section and key as Azure app settings and environment variables
+spell it:
+
+| Setting | Example | Notes |
+|---------|---------|-------|
+| `GatewayV1__BaseAddress` | `https://gateway.example.com/` | HTTPS. Requests go to `{BaseAddress}/v1/readings`. |
+| `GatewayV1__Resilience__…` | `GatewayV1__Resilience__Retry__MaxRetryAttempts=5` | Optional. Binds onto the standard resilience options. |
+| `GatewayAuth__TokenEndpoint` | `https://<tenant>.<region>.auth0.com/oauth/token` | HTTPS: the client secret is sent here. |
+| `GatewayAuth__ClientId` | | |
+| `GatewayAuth__ClientSecret` | `@Microsoft.KeyVault(SecretUri=…)` | **Secret.** A Key Vault reference in Azure; `local.settings.json` (gitignored) for local runs. Never in a committed file, never logged. |
+| `GatewayAuth__Audience` | the gateway API's identifier | Auth0 requires it. |
+| `GatewayAuth__Scope` | | Optional, for providers that identify the API by scope instead. |
+| `GatewayAuth__ClientAuthentication` | `ClientSecretPost` | Or `ClientSecretBasic` (HTTP Basic). Default `ClientSecretPost`, Auth0's default. |
+| `GatewayAuth__RenewalMargin` | `00:05:00` | Optional. |
+
+None of these is validated at startup. Until a gateway exists the Function keeps validating and
+logging device traffic, and every valid message ends as `ForwardingFailed` with the missing
+setting named in the log.
+
+---
+
+## 10. Open items
+
+| Item | Resolved by |
+|------|-------------|
+| An Auth0 tenant, an API whose identifier is the audience, and a machine-to-machine application authorised for it — the real client id and secret | [#12](https://github.com/asnielsen789/IIoT-platform/issues/12) |
+| The client secret in Key Vault, `GatewayAuth__ClientSecret` as a Key Vault reference, and the other settings in the infrastructure templates | [#12](https://github.com/asnielsen789/IIoT-platform/issues/12) |
+| The gateway mock configured with the tenant as its `Authority` | [#12](https://github.com/asnielsen789/IIoT-platform/issues/12) |
+| A gateway the deployed Function can reach over HTTPS — the mock hosted somewhere, or exposed through a tunnel — and a way to see what it received beyond its log | [#15](https://github.com/asnielsen789/IIoT-platform/issues/15) |
+| Durable dead-lettering of messages that fail to forward | [#19](https://github.com/asnielsen789/IIoT-platform/issues/19) |

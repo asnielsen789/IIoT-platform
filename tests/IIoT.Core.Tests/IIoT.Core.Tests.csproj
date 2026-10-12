@@ -26,6 +26,14 @@
     <Content Include="..\..\docs\schemas\examples\*.json"
       Link="Fixtures\%(Filename)%(Extension)"
       CopyToOutputDirectory="PreserveNewest" />
+
+    <!--
+      The gateway contract's schema, so every body the forwarder produces can be checked against
+      the published document - the same file the gateway mock enforces on the receiving side.
+    -->
+    <Content Include="..\..\docs\schemas\gateway\readings-v1.schema.json"
+      Link="Fixtures\Gateway\%(Filename)%(Extension)"
+      CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
   <ItemGroup>

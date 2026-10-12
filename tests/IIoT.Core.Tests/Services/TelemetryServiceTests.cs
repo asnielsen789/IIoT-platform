@@ -1,6 +1,11 @@
+using System.Net;
+using IIoT.Core.Authentication;
+using IIoT.Core.Forwarders;
 using IIoT.Core.Models;
 using IIoT.Core.Services;
 using IIoT.Core.Tests.Fixtures;
+using IIoT.Core.Tests.Logging;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
 namespace IIoT.Core.Tests.Services;
@@ -157,6 +162,79 @@ public class TelemetryServiceTests
         var outcome = await _service.ProcessAsync("{ not json", AuthenticatedDevice, EnqueuedAt);
 
         Assert.Equal(ProcessingOutcome.RejectedInvalidPayload, outcome);
+        Assert.Empty(_forwarder.Forwarded);
+    }
+
+    public static TheoryData<string> ForwardingFailures => new()
+    {
+        "gateway refused",
+        "no access token",
+        "network failure",
+        "timeout"
+    };
+
+    /// <summary>
+    /// Whatever made forwarding fail, the outcome says so and the service does not throw —
+    /// consistent with how rejections are handled. The log line is the only record of the
+    /// message until dead-lettering exists, so it must carry the message id, the authenticated
+    /// device and the reason.
+    /// </summary>
+    [Theory]
+    [MemberData(nameof(ForwardingFailures))]
+    public async Task ProcessAsync_ForwardingFails_ReturnsForwardingFailedAndLogsWhy(string failure)
+    {
+        var logger = new CapturingLogger<TelemetryService>();
+        var service = new TelemetryService(_forwarder, logger);
+        _forwarder.FailWith = failure switch
+        {
+            "gateway refused" => new ForwardingException("Gateway v1 responded 400 BadRequest: /readings/0/quality: missing") { StatusCode = HttpStatusCode.BadRequest },
+            "no access token" => new AccessTokenException("Token endpoint responded 401 Unauthorized: invalid_client"),
+            "network failure" => new HttpRequestException("Connection refused (gateway.iiot.test:443)"),
+            "timeout" => new TaskCanceledException("The request was canceled due to the configured HttpClient.Timeout"),
+            _ => throw new ArgumentOutOfRangeException(nameof(failure))
+        };
+
+        var outcome = await service.ProcessAsync(
+            ContractFixtures.Read("valid-minimal.json"), AuthenticatedDevice, EnqueuedAt);
+
+        Assert.Equal(ProcessingOutcome.ForwardingFailed, outcome);
+        Assert.Single(_forwarder.Forwarded);
+
+        var error = Assert.Single(logger.Entries, entry => entry.Level == LogLevel.Error);
+        Assert.Equal("01J8F2K9QS4T7V0X3Z6B8N1M5A", error.Properties["MessageId"]);
+        Assert.Equal(AuthenticatedDevice, error.Properties["DeviceId"]);
+        Assert.Equal(_forwarder.FailWith.Message, error.Properties["Reason"]);
+        Assert.Same(_forwarder.FailWith, error.Exception);
+    }
+
+    /// <summary>
+    /// The caller cancelling — the host shutting down — is not a forwarding failure. It
+    /// propagates, so the host can stop instead of logging an error for every message in flight.
+    /// </summary>
+    [Fact]
+    public async Task ProcessAsync_CallerCancels_PropagatesInsteadOfFailing()
+    {
+        using var cancellation = new CancellationTokenSource();
+        await cancellation.CancelAsync();
+        _forwarder.FailWith = new OperationCanceledException(cancellation.Token);
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => _service.ProcessAsync(
+            ContractFixtures.Read("valid-minimal.json"), AuthenticatedDevice, EnqueuedAt, cancellation.Token));
+    }
+
+    /// <summary>
+    /// A rejection decided before forwarding is still a rejection, even with a forwarder that
+    /// would fail: the identity checks are unchanged and come first.
+    /// </summary>
+    [Fact]
+    public async Task ProcessAsync_IdentityMismatch_IsStillRejectedBeforeForwarding()
+    {
+        _forwarder.FailWith = new ForwardingException("should never be reached");
+
+        var outcome = await _service.ProcessAsync(
+            ContractFixtures.Read("valid-full.json"), "tank-000999", EnqueuedAt);
+
+        Assert.Equal(ProcessingOutcome.RejectedIdentityMismatch, outcome);
         Assert.Empty(_forwarder.Forwarded);
     }
 }

@@ -48,7 +48,9 @@ public sealed class TelemetryFunction
 
         // The message is never re-thrown on rejection. A payload that fails validation will fail
         // identically on every retry, so throwing would only block the partition until the
-        // message expires. Dead-lettering is tracked separately.
+        // message expires. A forwarding failure is not re-thrown either: the forwarder has
+        // already retried, and TelemetryService has logged it. Until dead-lettering exists
+        // (#19), a message that failed to forward is lost.
         if (outcome != ProcessingOutcome.Forwarded)
         {
             _logger.LogDebug(

@@ -16,13 +16,16 @@ internal sealed class RecordingForwarder : IDataForwarder
 
     public ForwardedMessage? Last => _forwarded.Count > 0 ? _forwarded[^1] : null;
 
+    /// <summary>When set, every call is recorded and then fails with this.</summary>
+    public Exception? FailWith { get; set; }
+
     public Task ForwardAsync(
         TelemetryMessage message,
         ForwardingContext context,
         CancellationToken cancellationToken = default)
     {
         _forwarded.Add(new ForwardedMessage(message, context));
-        return Task.CompletedTask;
+        return FailWith is null ? Task.CompletedTask : Task.FromException(FailWith);
     }
 }
 

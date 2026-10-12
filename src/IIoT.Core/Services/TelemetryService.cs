@@ -103,7 +103,38 @@ public sealed class TelemetryService
         // proven, and it never needs to look at the payload's deviceId at all.
         var context = new ForwardingContext(authenticatedDeviceId, enqueuedAt);
 
-        await _forwarder.ForwardAsync(message, context, cancellationToken);
+        try
+        {
+            await _forwarder.ForwardAsync(message, context, cancellationToken);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
+        {
+            // By now the forwarder has already retried whatever was worth retrying, so this
+            // failure is final for this attempt: the gateway refused the message, stayed
+            // unavailable through every retry, or could not be reached or authenticated to.
+            //
+            // THE MESSAGE IS CURRENTLY LOST. Nothing downstream has it, and nothing here keeps
+            // it. Durable dead-lettering, so a failed message can be inspected and replayed, is
+            // #19 and does not exist yet. Until then this log line is the only record.
+            //
+            // Not rethrown, consistent with the rejections above. Rethrowing would not bring the
+            // message back: the trigger checkpoints past a failed invocation unless a retry
+            // policy is configured, and with one, a gateway outage would hold the whole
+            // partition behind this single message.
+            //
+            // Cancellation by the caller is not a forwarding failure; it propagates so the host
+            // can shut down cleanly.
+            _logger.LogError(
+                ex,
+                "Forwarding failed for message {MessageId} from device {DeviceId}: {Reason}. " +
+                "The message was not delivered and will not be retried",
+                message.MessageId,
+                authenticatedDeviceId,
+                ex.Message);
+
+            return ProcessingOutcome.ForwardingFailed;
+        }
+
         return ProcessingOutcome.Forwarded;
     }
 }
@@ -117,5 +148,11 @@ public enum ProcessingOutcome
     Forwarded,
     RejectedInvalidPayload,
     RejectedIdentityMismatch,
-    RejectedUnknownIdentity
+    RejectedUnknownIdentity,
+
+    /// <summary>
+    /// Valid and authenticated, but not delivered downstream. The message is currently lost;
+    /// dead-lettering is #19.
+    /// </summary>
+    ForwardingFailed
 }
