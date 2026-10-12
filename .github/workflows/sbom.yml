@@ -11,9 +11,9 @@ name: SBOM
 #
 # This workflow is the evidence for that clause, not a promise to produce it later. Every
 # commit that reaches main leaves behind a downloadable, machine-readable CycloneDX
-# document naming the components that commit is built from. CycloneDX is an ECMA standard
-# (ECMA-424) and one of the two formats regulators and tooling treat as "commonly used",
-# alongside SPDX.
+# document naming the components of the deployable built from that commit. CycloneDX is
+# an ECMA standard (ECMA-424) and one of the two formats regulators and tooling treat as
+# "commonly used", alongside SPDX.
 #
 # Dependabot (.github/dependabot.yml) is the other half of the same obligation: this
 # workflow documents the components, Dependabot handles the vulnerabilities in them.
@@ -46,11 +46,6 @@ env:
   DOTNET_NOLOGO: true
   DOTNET_CLI_TELEMETRY_OPTOUT: true
   DOTNET_SKIP_FIRST_TIME_EXPERIENCE: true
-  # The CycloneDX .NET tool version is pinned, for the same reason the actions are pinned
-  # to SHAs: the SBOM is a record, and a record produced by an unknown generator version
-  # is weaker evidence. Dependabot does not watch .NET global tools, so this line is
-  # bumped by hand.
-  CYCLONEDX_TOOL_VERSION: 6.2.0
 
 jobs:
   sbom:
@@ -72,54 +67,114 @@ jobs:
           # product is actually restored from, and that graph is SDK-dependent.
           global-json-file: global.json
 
-      # The CycloneDX .NET global tool, not a third-party GitHub Action wrapper.
+      # The CycloneDX .NET tool, not a third-party GitHub Action wrapper.
       #
       # CycloneDX/cyclonedx-dotnet is the upstream generator; the published actions around
       # it are thin shells that install and invoke this same tool. Using the tool directly
       # means one dependency to pin and trust instead of two, an exact version from NuGet
       # rather than a tag on a wrapper, and the generator running under the SDK that
       # global.json pins instead of whatever the wrapper image ships.
-      - name: Install CycloneDX tool
-        run: |
-          dotnet tool install --global CycloneDX --version "$CYCLONEDX_TOOL_VERSION"
-          echo "$HOME/.dotnet/tools" >> "$GITHUB_PATH"
+      #
+      # The version is pinned for the same reason the actions are pinned to SHAs: the SBOM
+      # is a record, and a record produced by an unknown generator version is weaker
+      # evidence. The pin lives in a local tool manifest, .config/dotnet-tools.json, because
+      # Dependabot does not track .NET global tools but its NuGet ecosystem does read that
+      # manifest. A new generator version therefore arrives as a pull request and is
+      # reviewed like any other dependency change. The Generate step runs the tool with
+      # `dotnet tool run`, which only ever uses the version the manifest names.
+      #
+      # The manifest has to stay under .config/. Dependabot does not read a
+      # dotnet-tools.json at the repository root
+      # (https://github.com/dependabot/dependabot-core/issues/7969), and on SDK 10
+      # `dotnet new tool-manifest` writes the file without the .config/ folder, so a
+      # regenerated manifest has to be moved back.
+      #
+      # The tool package ships net8.0, net9.0 and net10.0 builds. On the pinned SDK it runs
+      # the net10.0 build on the runtime that SDK brings, so it needs no other runtime and
+      # the manifest needs no roll-forward setting.
+      - name: Restore CycloneDX tool
+        run: dotnet tool restore
 
-      # Solution-level restore first. src/IIoT.Functions uses the Azure.Functions.Sdk
-      # project SDK, whose post-restore hook generates an extensions project; the hook is
-      # wired up by Directory.Solution.targets and therefore only runs when the solution
-      # is restored. Restoring here means the project assets the generator reads are
-      # complete and AZFW0108 does not appear.
+      # Solution-level restore, the same one ci.yml and codeql.yml run, so the SBOM reads
+      # the restore output that CI builds and tests. Restoring only the Function project
+      # gives it the same graph today; the point is one restore to reason about rather
+      # than one per workflow. tests/ and tools/ are restored too, but their graphs land in
+      # their own obj/ folders and nothing below reads them.
       - name: Restore
         run: dotnet restore IIoT.slnx
 
-      # --exclude-test-projects: the SBOM describes the product, and tests/ is never
-      #   shipped. xUnit, Moq and Testcontainers are build-time tooling, not components
-      #   contained in a product with digital elements. Dependabot still watches those
-      #   packages, so excluding them here loses no vulnerability coverage.
+      # The SBOM describes the deployable, src/IIoT.Functions, rather than the solution.
+      # CRA Annex I Part II point 1 asks for the components contained in the product, and
+      # the product is what gets deployed. Pointing the generator at the Function project
+      # leaves tests/ and tools/ out by construction instead of by flag. The flag this
+      # replaces, --exclude-test-projects, only recognised test projects, so the MQTT test
+      # client in tools/, a console app, put MQTTnet into the SBOM, and an advisory against
+      # MQTTnet would have looked as if it affected the platform. Dependabot still watches
+      # every project, tests/ and tools/ included, so leaving them out of the SBOM loses no
+      # vulnerability coverage.
+      #
+      # IIoT.Core is covered by the Function's own restore graph (obj/project.assets.json),
+      # which holds the full package closure, IIoT.Core's packages included, resolved the
+      # way the deployable resolves them. --recursive would add IIoT.Core's standalone
+      # graph on top, and that graph differs: it lists
+      # Microsoft.Extensions.Logging.Abstractions and its DependencyInjection.Abstractions
+      # dependency as packages, whereas the Function references the ASP.NET Core shared
+      # framework, which provides both, so restore prunes them and the deployable ships
+      # neither. IIoT.Core itself is first-party code, part of the product the root
+      # component names, and is not listed as a separate component.
+      #
+      # --disable-package-restore: read exactly what the Restore step wrote instead of
+      #   restoring a second time from a different entry point. The check after the command
+      #   is the price: with no restore output to read, CycloneDX still exits 0 and writes a
+      #   well-formed SBOM with no components in it, which the upload step's
+      #   if-no-files-found guard cannot see.
       # --set-version: the component version is the commit SHA, which makes the document
       #   traceable to an exact source state. The tool otherwise stamps 0.0.0, and an SBOM
       #   that cannot be tied to a revision is not evidence of anything.
       - name: Generate SBOM
         run: |
-          dotnet CycloneDX IIoT.slnx \
+          dotnet tool run dotnet-CycloneDX src/IIoT.Functions/IIoT.Functions.csproj \
             --output sbom \
             --filename iiot-platform.cdx.json \
             --output-format json \
-            --exclude-test-projects \
+            --disable-package-restore \
             --set-name IIoT-platform \
             --set-version "${{ github.sha }}"
+          if [ "$(jq '.components | length' sbom/iiot-platform.cdx.json)" -eq 0 ]; then
+            echo "::error title=Empty SBOM::No restored packages found for src/IIoT.Functions."
+            exit 1
+          fi
 
       # A short, human-readable summary in the run page, so the SBOM is checkable without
       # downloading and reading JSON.
+      #
+      # The generator line comes from the SBOM itself, which records the tool that wrote it
+      # under metadata.tools.components (CycloneDX 1.5 and later), so it shows the version
+      # that actually produced this file. The manifest is the fallback, labelled as such,
+      # should a future generator stop recording itself. The line is there because the
+      # version has to stay visible in every run: Dependabot's tool-manifest updates have
+      # been known to stop arriving without any error
+      # (https://github.com/dependabot/dependabot-core/issues/12910), and a pin that has
+      # silently stopped moving looks exactly like one that is current.
       - name: Summarise SBOM
         run: |
           file=sbom/iiot-platform.cdx.json
+          generator=$(jq -r '
+            [(.metadata.tools.components? // [])[] | "\(.name) \(.version)"] | join(", ")
+          ' "$file")
+          generator_source="recorded in the SBOM"
+          if [ -z "$generator" ]; then
+            manifest=.config/dotnet-tools.json
+            generator="CycloneDX $(jq -r '.tools.cyclonedx.version // "unknown"' "$manifest")"
+            generator_source="from $manifest, not recorded in the SBOM"
+          fi
           {
             echo "### CycloneDX SBOM"
             echo
             echo "- Spec version: \`$(jq -r '.specVersion' "$file")\`"
             echo "- Serial number: \`$(jq -r '.serialNumber' "$file")\`"
             echo "- Components: **$(jq '.components | length' "$file")**"
+            echo "- Generator: \`$generator\` ($generator_source)"
             echo "- Commit: \`${{ github.sha }}\`"
           } >> "$GITHUB_STEP_SUMMARY"
 
@@ -135,7 +190,9 @@ jobs:
           # its SBOMs for as long as artifacts can be kept. Pull request runs exist to
           # prove the step still works, not to be archived, so they expire quickly.
           #
-          # 90 days is not a retention policy for CRA purposes. When the project starts
-          # cutting releases, the release SBOM belongs on the release itself, which does
-          # not expire; artifact retention is the interim measure until then.
+          # 90 days is not a retention policy for CRA purposes. The durable answer is to
+          # attach the SBOM to each GitHub Release, which does not expire and sits next to
+          # the version it describes
+          # (https://github.com/asnielsen789/IIoT-platform/issues/33). Artifact retention is
+          # the interim measure until the project cuts releases.
           retention-days: ${{ github.event_name == 'pull_request' && 7 || 90 }}
