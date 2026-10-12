@@ -7,6 +7,7 @@
 
   <ItemGroup>
     <PackageReference Include="coverlet.collector" Version="10.1.0" />
+    <PackageReference Include="Microsoft.AspNetCore.Mvc.Testing" Version="10.0.12" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="18.10.1" />
     <PackageReference Include="xunit" Version="2.9.3" />
     <PackageReference Include="xunit.runner.visualstudio" Version="4.0.1" />
@@ -17,8 +18,23 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!--
+      Both contracts' example payloads, linked from docs/ rather than copied. The gateway examples
+      are what the mock must accept or reject; the device examples are what the platform receives
+      and forwards. Adding an example to either contract adds a test case here.
+    -->
+    <Content Include="..\..\docs\schemas\examples\*.json"
+      Link="Fixtures\Device\%(Filename)%(Extension)"
+      CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="..\..\docs\schemas\gateway\examples\*.json"
+      Link="Fixtures\Gateway\%(Filename)%(Extension)"
+      CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\..\src\IIoT.Core\IIoT.Core.csproj" />
     <ProjectReference Include="..\..\src\IIoT.Functions\IIoT.Functions.csproj" />
+    <ProjectReference Include="..\..\tools\IIoT.GatewayMock\IIoT.GatewayMock.csproj" />
   </ItemGroup>
 
 </Project>

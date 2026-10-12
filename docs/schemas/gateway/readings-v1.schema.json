@@ -1,0 +1,79 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://asnielsen789.github.io/IIoT-platform/schemas/gateway/readings-v1.schema.json",
+  "title": "Gateway readings v1",
+  "description": "Normative contract for the body of POST /v1/readings: one batch of readings the IIoT platform delivers to a downstream gateway. See docs/gateway-contract.md. Versioned independently of the device telemetry contract. Receivers ignore unknown fields.",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["contractVersion", "deviceId", "messageId", "receivedAt", "firmware", "readings"],
+  "properties": {
+    "contractVersion": {
+      "type": "integer",
+      "const": 1,
+      "description": "Contract version. Always 1 under /v1. A breaking change is a new path, /v2, not a new value here."
+    },
+    "deviceId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "description": "The device identity the platform authenticated (IoT Hub's iothub-connection-device-id). Never a value the device wrote into its own payload."
+    },
+    "messageId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "description": "The device's message id. Equal to the Idempotency-Key header; unique per device, not globally."
+    },
+    "receivedAt": {
+      "type": "string",
+      "format": "date-time",
+      "description": "When the platform received the message (IoT Hub enqueued time), in UTC. Platform clock, and therefore trustworthy as absolute time."
+    },
+    "firmware": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 32,
+      "description": "The firmware version the device reported running when it sent the message."
+    },
+    "readings": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 64,
+      "description": "Every reading in the device's message, in the order the device sent them. Several entries are buffered backfill after an outage and arrive in one request, never split.",
+      "items": { "$ref": "#/$defs/reading" }
+    }
+  },
+  "$defs": {
+    "reading": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["kind", "value", "unit", "at", "quality"],
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": ["level"],
+          "description": "What was measured. Only 'level' in v1. A new kind is a breaking change for this contract; see docs/gateway-contract.md."
+        },
+        "value": {
+          "type": "number",
+          "description": "The raw measured value, in unit. No conversion is performed by the platform."
+        },
+        "unit": {
+          "type": "string",
+          "enum": ["mm"],
+          "description": "UCUM unit code."
+        },
+        "at": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Time of measurement by the device clock. May lie hours or days in the past for buffered backfill, and must not be rejected on that basis."
+        },
+        "quality": {
+          "type": "string",
+          "enum": ["ok", "uncertain", "bad"],
+          "description": "The device's own assessment of the reading. Always present: the platform applies the device contract's default."
+        }
+      }
+    }
+  }
+}

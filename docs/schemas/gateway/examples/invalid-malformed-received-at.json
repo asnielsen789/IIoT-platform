@@ -1,0 +1,10 @@
+{
+  "contractVersion": 1,
+  "deviceId": "tank-000123",
+  "messageId": "01J8F2K9QS4T7V0X3Z6B8N1M5J",
+  "receivedAt": "the fourteenth of September",
+  "firmware": "1.4.2",
+  "readings": [
+    { "kind": "level", "value": 1432.5, "unit": "mm", "at": "2026-09-14T06:00:10Z", "quality": "ok" }
+  ]
+}
