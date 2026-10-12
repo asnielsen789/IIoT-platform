@@ -1,4 +1,4 @@
-<Project Sdk="Azure.Functions.Sdk/1.0.1">
+<Project Sdk="Azure.Functions.Sdk">
 
   <ItemGroup>
     <FrameworkReference Include="Microsoft.AspNetCore.App" />
