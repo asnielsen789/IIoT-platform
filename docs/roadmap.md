@@ -24,8 +24,9 @@ Purpose: establish the project foundation so the first iteration can start clean
 - [x] Project context and technology choices documented (C#/.NET 10, GitHub Actions)
 - [x] Backlog created with prioritised features
 - [x] MQTT payload contract defined
-- [ ] Provision an Azure subscription for development
-- [ ] Azure resources provisioned via IaC (Bicep): IoT Hub, Key Vault, Function App
+- [x] Provision an Azure subscription for development, with a budget alert — [#1](https://github.com/asnielsen789/IIoT-platform/issues/1)
+- [x] Azure resources defined as IaC (Bicep): IoT Hub, Key Vault, Function App, with a clean `what-if` — [#2](https://github.com/asnielsen789/IIoT-platform/issues/2)
+- [ ] Azure resources deployed for the first time — [#9](https://github.com/asnielsen789/IIoT-platform/issues/9)
 - [x] CI: format → build → test on pull requests and pushes to `main` — [#3](https://github.com/asnielsen789/IIoT-platform/issues/3)
 - [x] CI: branch protection requiring the check before merge — [#3](https://github.com/asnielsen789/IIoT-platform/issues/3)
 - [ ] CD: deploy to Azure — [#5](https://github.com/asnielsen789/IIoT-platform/issues/5)
@@ -121,6 +122,6 @@ to be demonstrable without physical hardware.
 
 ## Open items
 
-- [ ] Provision an Azure subscription — [#1](https://github.com/asnielsen789/IIoT-platform/issues/1)
+- [x] Provision an Azure subscription — [#1](https://github.com/asnielsen789/IIoT-platform/issues/1)
 - [ ] End-to-end demonstration with a simulated device — [#10](https://github.com/asnielsen789/IIoT-platform/issues/10)
 - [ ] Validate the message contract against real hardware (deferred) — [#22](https://github.com/asnielsen789/IIoT-platform/issues/22)
