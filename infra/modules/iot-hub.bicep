@@ -1,8 +1,6 @@
-// IoT Hub: device registry and MQTT/TLS ingestion point.
-//
-// Message routing is deliberately absent: it belongs to #9. No routes, no custom endpoints and
-// no fallback route are declared here. Without a fallback route, telemetry may not reach the
-// built-in endpoint the Function reads; see "Open points" in infra/README.md.
+// IoT Hub: device registry and MQTT/TLS ingestion point, with the message routing that delivers
+// device telemetry to the built-in endpoint the Function reads (#9, ADR-007), the Function's own
+// consumer group on that endpoint, and resource logs for routing and device connections.
 
 @description('IoT Hub name: 3-50 characters, globally unique (<name>.azure-devices.net).')
 @minLength(3)
@@ -26,6 +24,15 @@ param skuName string
 
 @description('Name of the dedicated shared access policy the Function reads telemetry with.')
 param telemetryReaderPolicyName string
+
+@description('Consumer group on the built-in endpoint that the Function reads, and no other reader uses.')
+param telemetryConsumerGroupName string
+
+@description('Name of the Log Analytics workspace, in this resource group, that receives the hub\'s resource logs.')
+param logAnalyticsWorkspaceName string
+
+// The Event Hubs-compatible built-in endpoint. Its name is fixed by IoT Hub.
+var builtInEndpointName = 'events'
 
 resource iotHub 'Microsoft.Devices/IotHubs@2023-06-30' = {
   name: name
@@ -52,6 +59,46 @@ resource iotHub 'Microsoft.Devices/IotHubs@2023-06-30' = {
       }
     }
 
+    // Message routing (#9). Declared in full rather than left to defaults: once any route exists,
+    // the built-in endpoint receives only what a route or the fallback route sends it, and a
+    // template without a fallback route leaves it disabled.
+    //
+    // No custom endpoints: everything goes to the built-in endpoint (ADR-007), so F1's one extra
+    // endpoint stays unused. One route is well within F1's five routing queries.
+    routing: {
+      routes: [
+        // Telemetry that declares contract version 1. Querying the body only works when the
+        // device sends contentType application/json and contentEncoding utf-8, exactly as
+        // section 1 of docs/mqtt-payload.md requires; without them IoT Hub does not evaluate the
+        // query. A message delivered by this route is therefore live proof that the device's
+        // property bag is right, and the hub's "Routing: messages delivered to fallback" metric
+        // counts every message the route did not match.
+        {
+          name: 'telemetry-v1'
+          source: 'DeviceMessages'
+          condition: '$body.schemaVersion = 1'
+          endpointNames: [
+            builtInEndpointName
+          ]
+          isEnabled: true
+        }
+      ]
+      // Everything the route does not match (another schema version, a body that is not JSON,
+      // or a device that left out the content properties) still reaches the Function, which
+      // rejects it with a logged reason. With the fallback route disabled, IoT Hub would drop
+      // such messages without a trace. When the route could not be evaluated at all, the reason
+      // is logged in the hub's Routes category (below).
+      fallbackRoute: {
+        name: '$fallback'
+        source: 'DeviceMessages'
+        condition: 'true'
+        endpointNames: [
+          builtInEndpointName
+        ]
+        isEnabled: true
+      }
+    }
+
     // Declaring authorizationPolicies replaces the hub's default policy list, so the five
     // defaults are restated here alongside the dedicated policy; the `az iot hub` tooling relies
     // on them. Trimming the defaults is a separate hardening decision for the security review
@@ -61,8 +108,9 @@ resource iotHub 'Microsoft.Devices/IotHubs@2023-06-30' = {
     // all permissions: the form IoT Hub reports for its defaults, and the one Microsoft's own
     // quickstart templates use.
     //
-    // No keys are given: Azure generates every key. Whether a redeployment keeps existing keys
-    // is unverified; see "Open points" in infra/README.md.
+    // No keys are given: Azure generates every key, and every deployment regenerates them all
+    // (ADR-007, update of 2026-10-12). See "Deploy" in infra/README.md for the refresh this
+    // requires.
     authorizationPolicies: [
       {
         keyName: 'iothubowner'
@@ -95,6 +143,49 @@ resource iotHub 'Microsoft.Devices/IotHubs@2023-06-30' = {
     // disableLocalAuth is deliberately not set (it defaults to false): the Function's connection
     // depends on hub-level SAS (ADR-007). disableDeviceSAS is not set either: the MQTT test
     // client authenticates with device symmetric keys.
+  }
+}
+
+// The Function's own consumer group on the built-in endpoint. Readers in one consumer group
+// compete for its partitions, and `az iot hub monitor-events` reads `$Default` unless told
+// otherwise, so the Function stays out of `$Default`. A hub allows 20 consumer groups on the
+// built-in endpoint, F1 included. The Function App's IoTHubConsumerGroup setting carries this
+// name to the trigger.
+resource telemetryConsumerGroup 'Microsoft.Devices/IotHubs/eventHubEndpoints/ConsumerGroups@2023-06-30' = {
+  name: '${iotHub.name}/${builtInEndpointName}/${telemetryConsumerGroupName}'
+  properties: {
+    name: telemetryConsumerGroupName
+  }
+}
+
+resource logAnalytics 'Microsoft.OperationalInsights/workspaces@2026-03-01' existing = {
+  name: logAnalyticsWorkspaceName
+}
+
+// Resource logs to Log Analytics, two categories only. Both land in the AzureDiagnostics table.
+// - Routes: route evaluation problems and endpoint health. A message without valid content
+//   properties is logged as RouteEvaluationError, a query on a missing field as
+//   UndefinedRouteEvaluation (both at most once a minute per hub). This category is the only
+//   place a routing failure is recorded, so it is what makes a silent routing failure visible.
+//   Successful deliveries are not logged: a healthy hub writes nothing here.
+// - Connections: device connects and disconnects, and failed connection attempts.
+// Platform metrics, including the routing metrics, are available without a diagnostic setting
+// and are not exported.
+resource diagnostics 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' = {
+  name: 'routes-and-connections'
+  scope: iotHub
+  properties: {
+    workspaceId: logAnalytics.id
+    logs: [
+      {
+        category: 'Routes'
+        enabled: true
+      }
+      {
+        category: 'Connections'
+        enabled: true
+      }
+    ]
   }
 }
 

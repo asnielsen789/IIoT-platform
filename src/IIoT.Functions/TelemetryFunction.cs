@@ -29,9 +29,19 @@ public sealed class TelemetryFunction
         _logger = logger;
     }
 
+    /// <remarks>
+    /// The consumer group comes from the <c>IoTHubConsumerGroup</c> app setting: a group of the
+    /// Function's own, so it does not compete for partitions with other readers of
+    /// <c>$Default</c>, such as <c>az iot hub monitor-events</c>. The setting has no default, and
+    /// the trigger cannot start without it, locally included. See infra/README.md.
+    /// </remarks>
     [Function(nameof(ProcessTelemetry))]
     public async Task ProcessTelemetry(
-        [EventHubTrigger("messages/events", Connection = "IoTHubConnection", IsBatched = false)]
+        [EventHubTrigger(
+            "messages/events",
+            Connection = "IoTHubConnection",
+            ConsumerGroup = "%IoTHubConsumerGroup%",
+            IsBatched = false)]
         EventData eventData,
         FunctionContext context)
     {

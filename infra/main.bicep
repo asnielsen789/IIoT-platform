@@ -74,6 +74,10 @@ var tags = {
 var telemetryReaderPolicyName = 'function-telemetry-reader'
 var telemetryConnectionSecretName = 'iothub-telemetry-connection'
 
+// The Function's own consumer group on the hub's built-in endpoint (#9). Created by the IoT Hub
+// module and handed to the Function App as the IoTHubConsumerGroup setting.
+var telemetryConsumerGroupName = 'telemetry-function'
+
 resource rg 'Microsoft.Resources/resourceGroups@2025-04-01' = {
   name: names.resourceGroup
   location: location
@@ -135,7 +139,13 @@ module iotHub 'modules/iot-hub.bicep' = {
     tags: tags
     skuName: iotHubSkuName
     telemetryReaderPolicyName: telemetryReaderPolicyName
+    telemetryConsumerGroupName: telemetryConsumerGroupName
+    logAnalyticsWorkspaceName: names.logAnalytics
   }
+  // The hub's diagnostic setting writes to the workspace.
+  dependsOn: [
+    monitoring
+  ]
 }
 
 module iotHubConnectionSecret 'modules/iot-hub-connection-secret.bicep' = {
@@ -155,7 +165,8 @@ module iotHubConnectionSecret 'modules/iot-hub-connection-secret.bicep' = {
 
 // Created last. Through the module outputs it consumes and the explicit dependency on
 // monitoring, the app comes into being only after its identity, its role assignments (in the
-// storage and Key Vault modules) and the secret it references all exist.
+// storage and Key Vault modules) and the secret it references all exist. The secret module
+// depends on the IoT Hub module, so the consumer group the trigger reads exists too.
 module functionApp 'modules/function-app.bicep' = {
   scope: rg
   params: {
@@ -170,6 +181,7 @@ module functionApp 'modules/function-app.bicep' = {
     deploymentContainerName: storage.outputs.deploymentContainerName
     applicationInsightsName: names.applicationInsights
     iotHubConnectionSecretUri: iotHubConnectionSecret.outputs.secretUri
+    iotHubConsumerGroupName: telemetryConsumerGroupName
     maximumInstanceCount: functionAppMaximumInstanceCount
   }
   dependsOn: [

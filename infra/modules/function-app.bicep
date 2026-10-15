@@ -40,6 +40,9 @@ param applicationInsightsName string
 @description('Versionless URI of the Key Vault secret holding the IoT Hub connection string.')
 param iotHubConnectionSecretUri string
 
+@description('Consumer group on the IoT Hub built-in endpoint that the trigger reads.')
+param iotHubConsumerGroupName string
+
 @description('Upper bound on on-demand instances. Caps runaway cost and the share of the regional Flex Consumption core quota the app can take.')
 @minValue(1)
 @maxValue(1000)
@@ -139,6 +142,13 @@ resource functionApp 'Microsoft.Web/sites@2025-03-01' = {
         {
           name: 'IoTHubConnection'
           value: '@Microsoft.KeyVault(SecretUri=${iotHubConnectionSecretUri})'
+        }
+        // The trigger's consumer group (ConsumerGroup = "%IoTHubConsumerGroup%"): the Function's
+        // own, created in the IoT Hub module, so it does not compete with other readers of
+        // `$Default`. Not a secret.
+        {
+          name: 'IoTHubConsumerGroup'
+          value: iotHubConsumerGroupName
         }
       ]
     }
