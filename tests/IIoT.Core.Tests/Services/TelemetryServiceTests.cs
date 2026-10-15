@@ -1,6 +1,11 @@
+using System.Net;
+using IIoT.Core.Authentication;
+using IIoT.Core.Forwarders;
 using IIoT.Core.Models;
 using IIoT.Core.Services;
 using IIoT.Core.Tests.Fixtures;
+using IIoT.Core.Tests.Logging;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
 namespace IIoT.Core.Tests.Services;
@@ -8,6 +13,12 @@ namespace IIoT.Core.Tests.Services;
 public class TelemetryServiceTests
 {
     private const string AuthenticatedDevice = "tank-000123";
+
+    /// <summary>
+    /// Deliberately different from every timestamp in the fixtures, so an assertion on it cannot
+    /// pass by picking up the device's own sentAt or measuredAt instead.
+    /// </summary>
+    private static readonly DateTimeOffset EnqueuedAt = new(2026, 9, 14, 6, 0, 13, 250, TimeSpan.Zero);
 
     private readonly RecordingForwarder _forwarder = new();
     private readonly TelemetryService _service;
@@ -21,10 +32,26 @@ public class TelemetryServiceTests
     public async Task ProcessAsync_MatchingIdentity_Forwards()
     {
         var outcome = await _service.ProcessAsync(
-            ContractFixtures.Read("valid-full.json"), AuthenticatedDevice);
+            ContractFixtures.Read("valid-full.json"), AuthenticatedDevice, EnqueuedAt);
 
         Assert.Equal(ProcessingOutcome.Forwarded, outcome);
-        Assert.Equal("01J8F2K9QS4T7V0X3Z6B8N1M5B", Assert.Single(_forwarder.Forwarded).MessageId);
+        Assert.Equal("01J8F2K9QS4T7V0X3Z6B8N1M5B", Assert.Single(_forwarder.Forwarded).Message.MessageId);
+    }
+
+    /// <summary>
+    /// The forwarder learns whose readings these are from the context, not the payload, and the
+    /// receipt time it is given is the hub's, not the device's.
+    /// </summary>
+    [Fact]
+    public async Task ProcessAsync_Forwards_WithAuthenticatedIdentityAndEnqueuedTime()
+    {
+        await _service.ProcessAsync(
+            ContractFixtures.Read("valid-full.json"), AuthenticatedDevice, EnqueuedAt);
+
+        var forwarded = Assert.Single(_forwarder.Forwarded);
+        Assert.Equal(AuthenticatedDevice, forwarded.Context.AuthenticatedDeviceId);
+        Assert.Equal(EnqueuedAt, forwarded.Context.EnqueuedAt);
+        Assert.NotEqual(forwarded.Message.SentAt, forwarded.Context.EnqueuedAt);
     }
 
     /// <summary>
@@ -35,10 +62,26 @@ public class TelemetryServiceTests
     public async Task ProcessAsync_NoDeviceIdInBody_Forwards()
     {
         var outcome = await _service.ProcessAsync(
-            ContractFixtures.Read("valid-minimal.json"), AuthenticatedDevice);
+            ContractFixtures.Read("valid-minimal.json"), AuthenticatedDevice, EnqueuedAt);
 
         Assert.Equal(ProcessingOutcome.Forwarded, outcome);
         Assert.Single(_forwarder.Forwarded);
+    }
+
+    /// <summary>
+    /// The case the context exists for. Without it, a message with no <c>deviceId</c> in the body
+    /// would reach the forwarder carrying readings that belong to no one.
+    /// </summary>
+    [Fact]
+    public async Task ProcessAsync_NoDeviceIdInBody_ContextStillCarriesTheAuthenticatedIdentity()
+    {
+        await _service.ProcessAsync(
+            ContractFixtures.Read("valid-minimal.json"), AuthenticatedDevice, EnqueuedAt);
+
+        var forwarded = Assert.Single(_forwarder.Forwarded);
+        Assert.Null(forwarded.Message.DeviceId);
+        Assert.Equal(AuthenticatedDevice, forwarded.Context.AuthenticatedDeviceId);
+        Assert.Equal(EnqueuedAt, forwarded.Context.EnqueuedAt);
     }
 
     /// <summary>
@@ -49,7 +92,7 @@ public class TelemetryServiceTests
     public async Task ProcessAsync_DeviceIdMismatch_IsRejectedAndNotForwarded()
     {
         var outcome = await _service.ProcessAsync(
-            ContractFixtures.Read("valid-full.json"), "tank-000999");
+            ContractFixtures.Read("valid-full.json"), "tank-000999", EnqueuedAt);
 
         Assert.Equal(ProcessingOutcome.RejectedIdentityMismatch, outcome);
         Assert.Empty(_forwarder.Forwarded);
@@ -63,7 +106,7 @@ public class TelemetryServiceTests
     public async Task ProcessAsync_DeviceIdDiffersOnlyInCase_IsRejected()
     {
         var outcome = await _service.ProcessAsync(
-            ContractFixtures.Read("valid-full.json"), "TANK-000123");
+            ContractFixtures.Read("valid-full.json"), "TANK-000123", EnqueuedAt);
 
         Assert.Equal(ProcessingOutcome.RejectedIdentityMismatch, outcome);
         Assert.Empty(_forwarder.Forwarded);
@@ -76,7 +119,7 @@ public class TelemetryServiceTests
     public async Task ProcessAsync_NoAuthenticatedIdentity_IsRejected(string? authenticatedDeviceId)
     {
         var outcome = await _service.ProcessAsync(
-            ContractFixtures.Read("valid-minimal.json"), authenticatedDeviceId);
+            ContractFixtures.Read("valid-minimal.json"), authenticatedDeviceId, EnqueuedAt);
 
         Assert.Equal(ProcessingOutcome.RejectedUnknownIdentity, outcome);
         Assert.Empty(_forwarder.Forwarded);
@@ -86,7 +129,8 @@ public class TelemetryServiceTests
     [MemberData(nameof(ContractFixtures.Invalid), MemberType = typeof(ContractFixtures))]
     public async Task ProcessAsync_InvalidPayload_IsNotForwarded(string fileName)
     {
-        var outcome = await _service.ProcessAsync(ContractFixtures.Read(fileName), AuthenticatedDevice);
+        var outcome = await _service.ProcessAsync(
+            ContractFixtures.Read(fileName), AuthenticatedDevice, EnqueuedAt);
 
         Assert.Equal(ProcessingOutcome.RejectedInvalidPayload, outcome);
         Assert.Empty(_forwarder.Forwarded);
@@ -101,21 +145,96 @@ public class TelemetryServiceTests
     public async Task ProcessAsync_BufferedBackfill_ForwardsTheWholeBatch()
     {
         var outcome = await _service.ProcessAsync(
-            ContractFixtures.Read("valid-buffered-backfill.json"), AuthenticatedDevice);
+            ContractFixtures.Read("valid-buffered-backfill.json"), AuthenticatedDevice, EnqueuedAt);
 
         Assert.Equal(ProcessingOutcome.Forwarded, outcome);
 
         var forwarded = Assert.Single(_forwarder.Forwarded);
-        Assert.Equal(3, forwarded.Measurements.Count);
-        Assert.Contains(forwarded.Measurements, m => m.Quality == MeasurementQuality.Uncertain);
+        Assert.Equal(3, forwarded.Message.Measurements.Count);
+        Assert.Contains(forwarded.Message.Measurements, m => m.Quality == MeasurementQuality.Uncertain);
+        Assert.Equal(AuthenticatedDevice, forwarded.Context.AuthenticatedDeviceId);
+        Assert.Equal(EnqueuedAt, forwarded.Context.EnqueuedAt);
     }
 
     [Fact]
     public async Task ProcessAsync_MalformedPayload_IsRejectedWithoutThrowing()
     {
-        var outcome = await _service.ProcessAsync("{ not json", AuthenticatedDevice);
+        var outcome = await _service.ProcessAsync("{ not json", AuthenticatedDevice, EnqueuedAt);
 
         Assert.Equal(ProcessingOutcome.RejectedInvalidPayload, outcome);
+        Assert.Empty(_forwarder.Forwarded);
+    }
+
+    public static TheoryData<string> ForwardingFailures => new()
+    {
+        "gateway refused",
+        "no access token",
+        "network failure",
+        "timeout"
+    };
+
+    /// <summary>
+    /// Whatever made forwarding fail, the outcome says so and the service does not throw —
+    /// consistent with how rejections are handled. The log line is the only record of the
+    /// message until dead-lettering exists, so it must carry the message id, the authenticated
+    /// device and the reason.
+    /// </summary>
+    [Theory]
+    [MemberData(nameof(ForwardingFailures))]
+    public async Task ProcessAsync_ForwardingFails_ReturnsForwardingFailedAndLogsWhy(string failure)
+    {
+        var logger = new CapturingLogger<TelemetryService>();
+        var service = new TelemetryService(_forwarder, logger);
+        _forwarder.FailWith = failure switch
+        {
+            "gateway refused" => new ForwardingException("Gateway v1 responded 400 BadRequest: /readings/0/quality: missing") { StatusCode = HttpStatusCode.BadRequest },
+            "no access token" => new AccessTokenException("Token endpoint responded 401 Unauthorized: invalid_client"),
+            "network failure" => new HttpRequestException("Connection refused (gateway.iiot.test:443)"),
+            "timeout" => new TaskCanceledException("The request was canceled due to the configured HttpClient.Timeout"),
+            _ => throw new ArgumentOutOfRangeException(nameof(failure))
+        };
+
+        var outcome = await service.ProcessAsync(
+            ContractFixtures.Read("valid-minimal.json"), AuthenticatedDevice, EnqueuedAt);
+
+        Assert.Equal(ProcessingOutcome.ForwardingFailed, outcome);
+        Assert.Single(_forwarder.Forwarded);
+
+        var error = Assert.Single(logger.Entries, entry => entry.Level == LogLevel.Error);
+        Assert.Equal("01J8F2K9QS4T7V0X3Z6B8N1M5A", error.Properties["MessageId"]);
+        Assert.Equal(AuthenticatedDevice, error.Properties["DeviceId"]);
+        Assert.Equal(_forwarder.FailWith.Message, error.Properties["Reason"]);
+        Assert.Same(_forwarder.FailWith, error.Exception);
+    }
+
+    /// <summary>
+    /// The caller cancelling — the host shutting down — is not a forwarding failure. It
+    /// propagates, so the host can stop instead of logging an error for every message in flight.
+    /// </summary>
+    [Fact]
+    public async Task ProcessAsync_CallerCancels_PropagatesInsteadOfFailing()
+    {
+        using var cancellation = new CancellationTokenSource();
+        await cancellation.CancelAsync();
+        _forwarder.FailWith = new OperationCanceledException(cancellation.Token);
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => _service.ProcessAsync(
+            ContractFixtures.Read("valid-minimal.json"), AuthenticatedDevice, EnqueuedAt, cancellation.Token));
+    }
+
+    /// <summary>
+    /// A rejection decided before forwarding is still a rejection, even with a forwarder that
+    /// would fail: the identity checks are unchanged and come first.
+    /// </summary>
+    [Fact]
+    public async Task ProcessAsync_IdentityMismatch_IsStillRejectedBeforeForwarding()
+    {
+        _forwarder.FailWith = new ForwardingException("should never be reached");
+
+        var outcome = await _service.ProcessAsync(
+            ContractFixtures.Read("valid-full.json"), "tank-000999", EnqueuedAt);
+
+        Assert.Equal(ProcessingOutcome.RejectedIdentityMismatch, outcome);
         Assert.Empty(_forwarder.Forwarded);
     }
 }

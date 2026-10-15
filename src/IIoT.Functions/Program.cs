@@ -1,6 +1,4 @@
-using IIoT.Core.Forwarders;
-using IIoT.Core.Interfaces;
-using IIoT.Core.Services;
+using IIoT.Functions;
 using Microsoft.Azure.Functions.Worker;
 using Microsoft.Azure.Functions.Worker.Builder;
 using Microsoft.Extensions.DependencyInjection;
@@ -29,8 +27,9 @@ builder.Logging.Services.Configure<LoggerFilterOptions>(options =>
         options.Rules.Remove(defaultRule);
 });
 
-builder.Services.AddHttpClient<GatewayV1Forwarder>();
-builder.Services.AddSingleton<IDataForwarder, GatewayV1Forwarder>();
-builder.Services.AddSingleton<TelemetryService>();
+// The processing pipeline. The forwarder is a typed HTTP client with a resilience handler, and
+// the lifetimes are chosen so that nothing holds one beyond a single invocation; the reasoning is
+// on ForwardingServiceCollectionExtensions. Settings: GatewayV1 and GatewayAuth.
+builder.Services.AddTelemetryForwarding(builder.Configuration);
 
 builder.Build().Run();

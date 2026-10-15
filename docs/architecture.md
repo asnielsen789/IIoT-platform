@@ -108,8 +108,8 @@ sequenceDiagram
     AF->>A0: Request JWT token (client credentials)
     A0-->>AF: JWT token (1h lifetime, cached)
 
-    AF->>GW: HTTPS POST (data + JWT)
-    GW-->>AF: 200 OK / ACK
+    AF->>GW: HTTPS POST /v1/readings (batch + JWT + Idempotency-Key)
+    GW-->>AF: 202 Accepted
 
     Note over AF: Log result to Application Insights
 ```
@@ -161,6 +161,15 @@ Azure Function
 
 Forwarder selection is driven by configuration (environment variable / app setting) rather
 than a code change. Both implementations can run in parallel during a transition period.
+
+The forwarder receives the whole validated message together with a forwarding context — the
+authenticated device identity and IoT Hub's enqueued time — so identity and receipt time
+downstream never come from the payload. The v1 format is the platform's own, versioned
+independently of the device contract:
+
+- Contract: [`gateway-contract.md`](gateway-contract.md)
+- Normative schema: [`schemas/gateway/readings-v1.schema.json`](schemas/gateway/readings-v1.schema.json)
+- Reference receiver: [`tools/IIoT.GatewayMock`](../tools/IIoT.GatewayMock/README.md)
 
 ### Modularity for hand-over
 

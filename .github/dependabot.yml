@@ -29,6 +29,7 @@ updates:
       - "/tests/IIoT.Core.Tests"
       - "/tests/IIoT.Integration.Tests"
       - "/tests/IIoT.TestClient.Tests"
+      - "/tools/IIoT.GatewayMock"
       - "/tools/IIoT.TestClient"
     schedule:
       interval: weekly
