@@ -40,6 +40,13 @@ updates:
     commit-message:
       prefix: chore
       include: scope
+    ignore:
+      # Application Insights 3.x is a breaking rewrite. The Functions worker's integration
+      # (Microsoft.Azure.Functions.Worker.ApplicationInsights) is built against 2.x and crashes the
+      # worker on startup with a TypeLoadException on 3.x. Revisit when that package supports 3.x;
+      # WorkerCompositionTests fails if 3.x is reintroduced by hand.
+      - dependency-name: "Microsoft.ApplicationInsights*"
+        update-types: ["version-update:semver-major"]
     groups:
       # Minor and patch updates are collected into one pull request per week. They are
       # almost always safe and individually uninteresting, and one green CI run over the

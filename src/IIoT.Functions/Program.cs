@@ -1,31 +1,15 @@
 using IIoT.Functions;
 using Microsoft.Azure.Functions.Worker;
 using Microsoft.Azure.Functions.Worker.Builder;
-using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
-using Microsoft.Extensions.Logging;
 
 var builder = FunctionsApplication.CreateBuilder(args);
 
 builder.ConfigureFunctionsWebApplication();
 
-// Application Insights. Connection string comes from APPLICATIONINSIGHTS_CONNECTION_STRING,
-// which the Bicep template supplies; locally its absence simply means nothing is exported.
-builder.Services.AddApplicationInsightsTelemetryWorkerService();
-builder.Services.ConfigureFunctionsApplicationInsights();
-
-// The worker installs a filter that drops anything below Warning before it reaches Application
-// Insights. The security events and rejection reasons this platform logs are exactly what needs
-// to survive, so the default rule is removed. Structured logging and metrics are a separate
-// piece of work.
-builder.Logging.Services.Configure<LoggerFilterOptions>(options =>
-{
-    var defaultRule = options.Rules.FirstOrDefault(rule =>
-        rule.ProviderName == "Microsoft.Extensions.Logging.ApplicationInsights.ApplicationInsightsLoggerProvider");
-
-    if (defaultRule is not null)
-        options.Rules.Remove(defaultRule);
-});
+// Application Insights, including the logging filter the platform needs. Kept in an extension
+// method so a test runs exactly this wiring; see ObservabilityServiceCollectionExtensions.
+builder.Services.AddTelemetryObservability();
 
 // The processing pipeline. The forwarder is a typed HTTP client with a resilience handler, and
 // the lifetimes are chosen so that nothing holds one beyond a single invocation; the reasoning is

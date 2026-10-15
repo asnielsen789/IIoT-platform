@@ -71,8 +71,15 @@ public static class ForwardingServiceCollectionExtensions
         // errors and timeouts — with exponential backoff and jitter, honours Retry-After, and
         // never retries any other 4xx. It retries POST too, which is safe here only because every
         // request carries an Idempotency-Key the gateway deduplicates on.
-        services.AddHttpClient<IDataForwarder, GatewayV1Forwarder>(GatewayV1Forwarder.HttpClientName)
-            .AddStandardResilienceHandler(configuration.GetSection(GatewayResilienceSection));
+        var gatewayClient = services.AddHttpClient<IDataForwarder, GatewayV1Forwarder>(GatewayV1Forwarder.HttpClientName);
+        var resilience = configuration.GetSection(GatewayResilienceSection);
+
+        // The section is optional, but the overload that binds it throws when the section is
+        // absent — at startup, before any function is indexed.
+        if (resilience.Exists())
+            gatewayClient.AddStandardResilienceHandler(resilience);
+        else
+            gatewayClient.AddStandardResilienceHandler();
 
         services.AddScoped<TelemetryService>();
 

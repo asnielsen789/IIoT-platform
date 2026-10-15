@@ -2,7 +2,14 @@
 
   <ItemGroup>
     <FrameworkReference Include="Microsoft.AspNetCore.App" />
-    <PackageReference Include="Microsoft.ApplicationInsights.WorkerService" Version="3.2.0" />
+    <!--
+      Held on 2.x deliberately. Application Insights 3.x is a breaking rewrite that removed types,
+      such as ITelemetryInitializer, which Microsoft.Azure.Functions.Worker.ApplicationInsights
+      (built against the 2.x line) still uses. A 3.x package compiles, then crashes the worker on
+      startup with a TypeLoadException. WorkerCompositionTests guards this; dependabot.yml ignores
+      major updates until the Functions integration supports 3.x.
+    -->
+    <PackageReference Include="Microsoft.ApplicationInsights.WorkerService" Version="2.23.0" />
     <PackageReference Include="Microsoft.Azure.Functions.Worker" Version="2.52.0" />
     <PackageReference Include="Microsoft.Azure.Functions.Worker.ApplicationInsights" Version="2.51.0" />
     <PackageReference Include="Microsoft.Azure.Functions.Worker.Extensions.EventHubs" Version="6.5.0" />
