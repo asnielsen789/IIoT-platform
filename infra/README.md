@@ -341,19 +341,22 @@ properties were missing or invalid, `UndefinedRouteEvaluation` that the body had
 **Logs**:
 
 ```kusto
-traces
+union traces, exceptions
 | where timestamp > ago(2h)
-| where message startswith "Device " or message startswith "Rejected message"
-    or message startswith "Security event" or message startswith "Forwarding failed"
-| project timestamp, severityLevel, message
+| extend text = coalesce(tostring(customDimensions.FormattedMessage), message)
+| where text startswith "Device " or text startswith "Rejected message"
+    or text startswith "Security event" or text startswith "Forwarding failed"
+| project timestamp, itemType, severityLevel, text
 | order by timestamp desc
 ```
 
 Expect `Device tank-000001 measured level=...`, the reading as the Function validated it. Until a
 downstream gateway is configured, it is followed by `Forwarding failed for message ...`, which
 is expected: see "Configuration" in section 9 of the
-[gateway contract](../docs/gateway-contract.md). If nothing appears, look for errors from the
-host, such as a trigger listener that could not start:
+[gateway contract](../docs/gateway-contract.md). A forwarding failure is logged together with its
+exception, so Application Insights records it in `exceptions` rather than `traces`, with the
+log text in `customDimensions.FormattedMessage`; that is why the query reads both. If nothing
+appears, look for errors from the host, such as a trigger listener that could not start:
 
 ```kusto
 union traces, exceptions
