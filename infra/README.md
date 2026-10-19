@@ -497,15 +497,15 @@ and the setup below creates it.
 
 ### One-time setup
 
-Create the GitHub environment first, and its variables once an infrastructure deployment has
-created the deployment identity (steps 1 to 6 of [Deploy](#deploy)). The environment does not
-depend on Azure, and creating it first puts its branch policy in place before the federated
-credential that relies on it exists. This needs admin rights on the repository. Run from the
+Create the GitHub environment first, and its secrets and variables once an infrastructure
+deployment has created the deployment identity (steps 1 to 6 of [Deploy](#deploy)). The
+environment does not depend on Azure, and creating it first puts its branch policy in place
+before the federated credential that relies on it exists. This needs admin rights on the repository. Run from the
 repository root in Git Bash: `{owner}/{repo}` is literal, and `gh` fills in this repository. The
 values go from the Azure CLI straight into GitHub and are never written to a file.
 
 Until the setup is complete, a run of the workflow builds and tests, then fails in the deploy
-job, either at the variable check or at the login. That includes the run that merging this
+job, either at the settings check or at the login. That includes the run that merging this
 workflow into `main` starts.
 
 1. Create the environment `staging` and allow deployments from `main` only:
@@ -534,16 +534,17 @@ workflow into `main` starts.
    SUBSCRIPTION_ID=$(az account show --query id -o tsv | tr -d '\r')
    ```
 
-3. Set the five variables:
+3. Set the three IDs as environment secrets and the two names as environment variables:
 
    ```sh
-   gh variable set AZURE_CLIENT_ID --env staging --body "$CLIENT_ID"
-   gh variable set AZURE_TENANT_ID --env staging --body "$TENANT_ID"
-   gh variable set AZURE_SUBSCRIPTION_ID --env staging --body "$SUBSCRIPTION_ID"
+   gh secret set AZURE_CLIENT_ID --env staging --body "$CLIENT_ID"
+   gh secret set AZURE_TENANT_ID --env staging --body "$TENANT_ID"
+   gh secret set AZURE_SUBSCRIPTION_ID --env staging --body "$SUBSCRIPTION_ID"
    gh variable set AZURE_RESOURCE_GROUP --env staging --body "$RG"
    gh variable set AZURE_FUNCTIONAPP_NAME --env staging --body "$FUNC_APP"
 
-   # Names only: expect all five
+   # Names only: expect the three secrets and the two variables
+   gh secret list --env staging --json name --jq '.[].name'
    gh variable list --env staging --json name --jq '.[].name'
    ```
 
@@ -556,19 +557,18 @@ workflow into `main` starts.
    It worked when both jobs pass and the environment `staging` shows the deployment with its
    commit. A smoke check is not proof of processing; confirm with step 7 of [Deploy](#deploy).
 
-The variables are identifiers, not credentials, but the repository is public and so are its
-workflow logs. GitHub prints the inputs of every step and masks secrets, not variables, so the
-tenant and subscription IDs, and the client ID in the login step's inputs, can be read in the log
-of every run. To keep them out of the logs, store those three as environment secrets instead
-(`gh secret set NAME --env staging --body "$VALUE"`) and read them in `deploy.yml` as `secrets.`
-rather than `vars.`.
+None of the three IDs is a credential: without the federated credential, a client ID grants
+nothing. They are secrets only because the repository is public, and so are its workflow logs:
+GitHub prints the inputs of every step and masks secrets, not variables. As secrets, the tenant
+and subscription IDs stay out of the logs, as they stay out of the repository. The resource group
+and app names are not sensitive and stay variables.
 
 ### After the infrastructure is recreated
 
 Tearing down deletes the deployment identity with everything else, and the next deployment
 creates a new one with a new client ID. The names of the resource group and the app are
 deterministic and do not change. After steps 1 to 6 of [Deploy](#deploy), read `CLIENT_ID` as in
-step 2 above, set `AZURE_CLIENT_ID` again as in step 3, and run the workflow: the recreated app
+step 2 above, set the secret `AZURE_CLIENT_ID` again as in step 3, and run the workflow: the recreated app
 has an empty deployment container until it does.
 
 ### When the login or the deployment fails

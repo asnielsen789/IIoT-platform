@@ -18,8 +18,9 @@ name: Deploy
 #   only a token GitHub issued for the subject the identity's federated credential names: this
 #   repository, by its immutable owner and repository IDs, in the GitHub environment `staging`.
 #   There is no client secret or certificate to store, leak or rotate. The client, tenant and
-#   subscription IDs are identifiers, not credentials; they are variables of the `staging`
-#   environment rather than part of this file.
+#   subscription IDs are identifiers, not credentials, but they are stored as secrets of the
+#   `staging` environment: the repository is public, so are its workflow logs, and GitHub masks
+#   secrets in logs but prints variables. The resource group and app names are variables.
 # - The subject binds to the environment, not to a branch. The environment's deployment branch
 #   policy, which allows only main, is what keeps any other branch from obtaining a token that
 #   matches. It is part of the security boundary; infra/README.md shows how to set it up.
@@ -149,7 +150,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     # Records the deployment, with its commit, on the Environments page, applies the
-    # environment's branch policy, supplies its variables, and puts `environment:staging` into
+    # environment's branch policy, supplies its secrets and variables, and puts `environment:staging` into
     # the OIDC token's subject, which is what the federated credential trusts.
     environment: staging
     # The one job that may request an OIDC token.
@@ -159,12 +160,12 @@ jobs:
 
     steps:
       # Without these, azure/login fails with messages that do not name the cause. The check
-      # sees only whether each variable is set, so this step prints none of the values.
-      - name: Check environment variables
+      # sees only whether each value is set, so this step prints none of them.
+      - name: Check environment settings
         env:
-          AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID != '' }}
-          AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID != '' }}
-          AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID != '' }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID != '' }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID != '' }}
+          AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID != '' }}
           AZURE_RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP != '' }}
           AZURE_FUNCTIONAPP_NAME: ${{ vars.AZURE_FUNCTIONAPP_NAME != '' }}
         run: |
@@ -173,7 +174,7 @@ jobs:
             [ "${!name}" = "true" ] || missing="$missing $name"
           done
           if [ -n "$missing" ]; then
-            echo "::error title=Environment not set up::The staging environment lacks the variables:$missing. See \"Continuous deployment\" in infra/README.md."
+            echo "::error title=Environment not set up::The staging environment lacks:$missing. See \"Continuous deployment\" in infra/README.md."
             exit 1
           fi
 
@@ -210,13 +211,15 @@ jobs:
           echo "Package layout OK: $(find "$PACKAGE" -type f | wc -l) files, worker $worker."
 
       # OIDC: no client secret. `id-token: write` above lets the action request the token.
-      # Its post step signs the Azure CLI out again when the job ends.
+      # Its post step signs the Azure CLI out again when the job ends. The three IDs come from
+      # environment secrets only so that they are masked in this public log; none of them is a
+      # credential.
       - name: Log in to Azure
         uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
         with:
-          client-id: ${{ vars.AZURE_CLIENT_ID }}
-          tenant-id: ${{ vars.AZURE_TENANT_ID }}
-          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
       # With an Azure sign-in (RBAC) the action reads the app's SKU itself, sees
       # FlexConsumption and deploys through One Deploy, so `sku` is not set; Microsoft requires
