@@ -787,10 +787,11 @@ The open points of the first deployment, as observed in
    Consumption the reference resolves (step 5), the trigger connects and processes messages
    (step 7), and the app scales out from zero: after four idle days, a message was processed
    about 11 s after IoT Hub enqueued it (2026-10-19).
-2. **Policy keys on redeployment: still open.** ADR-007's update concludes from the IoT Hub API
-   reference that every deployment generates new keys for all six policies. The next
-   infrastructure deployment confirms it with the key hash under [Re-deploying](#re-deploying),
-   and step 7 shows whether the Function keeps processing after the step 5 refresh.
+2. **Policy keys on redeployment: confirmed** (2026-10-19). As ADR-007's update concluded from
+   the IoT Hub API reference, the second infrastructure deployment generated a new key for the
+   Function's policy (the key hash under [Re-deploying](#re-deploying) changed), and after the
+   step 5 refresh the Function went on processing: a message sent afterwards was processed
+   about 16 s later.
 3. **Routing on the message body: confirmed** (2026-10-15). The test client's message took the
    `telemetry-v1` route, with no message in the fallback count, which confirms routing and the
    documented MQTT property bag together.
