@@ -21,6 +21,7 @@ the Function App on a Flex Consumption plan with its storage account, and monito
 | `modules/monitoring.bicep` | Log Analytics workspace and workspace-based Application Insights |
 | `modules/storage.bicep` | Host storage and deployment package container, with the identity's storage roles |
 | `modules/key-vault.bicep` | Key Vault (Azure RBAC), with the identity's read access to secrets |
+| `modules/device-ca-keys.bicep` | The device certificate authority's root and issuing CA keys, in that vault ([ADR-009](../docs/adr/adr-009-device-pki.md)) |
 | `modules/iot-hub.bicep` | IoT Hub: shared access policies, message routing, the Function's consumer group, resource logs |
 | `modules/iot-hub-connection-secret.bicep` | Builds the Function's IoT Hub connection string and writes it to Key Vault |
 | `modules/function-app.bicep` | Flex Consumption plan and Function App |
@@ -65,7 +66,7 @@ az deployment sub what-if \
 
 `--location` is where Azure stores the deployment record; the resources take their region from
 the parameter file. Treat what-if output as internal: do not paste it into issues, pull
-requests or commits. On a subscription where nothing is deployed yet, the plan is 20 resources
+requests or commits. On a subscription where nothing is deployed yet, the plan is 22 resources
 to create.
 
 ## Deploy
@@ -132,10 +133,11 @@ az deployment sub what-if \
   --parameters infra/environments/staging.bicepparam
 ```
 
-The first time, expect **20 resources to create**: the resource group; the IoT Hub, its consumer
+The first time, expect **22 resources to create**: the resource group; the IoT Hub, its consumer
 group `telemetry-function` and its diagnostic setting `routes-and-connections`; the Log
-Analytics workspace and Application Insights; the Key Vault with its role assignment and the
-secret `iothub-telemetry-connection`; the managed identity; the storage account with its blob
+Analytics workspace and Application Insights; the Key Vault with its role assignment, the
+secret `iothub-telemetry-connection` and the device CA keys `device-ca-root` and
+`device-ca-issuing`; the managed identity; the storage account with its blob
 service, container `app-package` and two role assignments; the Flex Consumption plan and the
 Function App; the deployment identity `id-iiot-staging-neu-github`, its federated credential
 `github-staging` and its role assignment on the Function App. In the IoT Hub's properties, check
@@ -147,7 +149,11 @@ settings are not visible here; step 6 checks them.
 On a later deployment, nothing should be created. Read anything that is not `NoChange` or an
 expected `Modify` before going on. The first deployment after continuous deployment was added
 is the exception: it creates the deployment identity, its federated credential and its role
-assignment, three resources, and changes nothing else.
+assignment, three resources, and changes nothing else. So is the first deployment after the
+device certificate authority was added: it creates the two CA keys and changes nothing else. On
+later deployments the keys stay as they are: Azure creates a key only if none exists by that
+name, and never updates an existing one or adds a version to it
+([Device certificate authority](#device-certificate-authority)).
 
 ### 3. Deploy the infrastructure
 
@@ -428,7 +434,11 @@ leave something behind:
 - **Key Vault** goes into soft delete for 90 days, and its name stays reserved: the next
   deployment fails because a vault with that name exists in a deleted state. Purge protection
   is off ([Key Vault](#key-vault)), so purge it, which is permanent and also removes the stale
-  connection string, or recover it:
+  connection string, or recover it. **Purging also destroys the device CA keys.** The next
+  deployment creates new ones, and every certificate the old CA issued stops working: run
+  [Device certificate authority (one-time)](#device-certificate-authority-one-time) again,
+  with `init --force`, and issue every device a new certificate. Recovering the vault keeps the
+  CA:
 
   ```sh
   az keyvault list-deleted --query "[].name" -o tsv
@@ -750,6 +760,32 @@ Azure RBAC instead of access policies. Soft delete is at its default: enabled, 9
 Purge protection is **off** on purpose. Staging is torn down and recreated, and with purge
 protection on, a deleted vault could not be purged: its deterministic name would stay blocked
 for the whole retention period. A production environment would turn it on.
+
+### Device certificate authority
+
+Devices authenticate with X.509 certificates from the platform's own CA
+([ADR-009](../docs/adr/adr-009-device-pki.md)). `modules/device-ca-keys.bicep` creates its two
+keys in the vault: `device-ca-root` and `device-ca-issuing`, both EC P-256, usable only to sign
+and verify, and not exportable. Key Vault is not a CA service; the signing tool
+[`tools/IIoT.DeviceCa`](../tools/IIoT.DeviceCa/README.md) builds the certificates and has Key
+Vault sign them, so the private keys never leave the vault.
+
+- **Redeploying leaves the keys alone.** The resource type is backed by the ARM operation
+  *Keys - Create If Not Exist*: it creates the first version of a key that does not exist, and
+  for one that does, returns it "without any write operations being performed"; it "does not
+  create subsequent versions, and does not update existing keys" (azure-rest-api-specs,
+  `Microsoft.KeyVault` stable 2026-05-15, `Keys_CreateIfNotExist`). Unlike the IoT Hub policy
+  keys, the CA keys survive every infrastructure deployment. The flip side is that a changed
+  key property in the template has no effect on an existing key.
+- **The template creates keys only.** The CA certificates are public data that the tool writes
+  to the vault as the secrets `device-ca-root-certificate` and `device-ca-issuing-certificate`.
+  No role in the template lets anything use the keys: the Function App's identity reads
+  secrets, and an operator who signs gets the roles in
+  [Device certificate authority (one-time)](#device-certificate-authority-one-time) assigned by
+  hand.
+- **Software-protected.** The standard SKU protects keys in software. Production would use
+  HSM-backed keys (`EC-HSM` in a premium vault, or Managed HSM) and keep the root offline;
+  ADR-009 documents this and does not build it.
 
 ### IoT Hub
 
