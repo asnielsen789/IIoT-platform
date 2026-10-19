@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <IsPackable>false</IsPackable>
+    <RootNamespace>IIoT.DeviceCa</RootNamespace>
+    <AssemblyName>IIoT.DeviceCa</AssemblyName>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- The operator's own sign-in (Azure CLI locally); see Program.CreateCredential. -->
+    <PackageReference Include="Azure.Identity" Version="1.21.0" />
+
+    <!-- The CA keys live in Key Vault and sign there; the certificates are stored as secrets. -->
+    <PackageReference Include="Azure.Security.KeyVault.Keys" Version="4.10.2" />
+    <PackageReference Include="Azure.Security.KeyVault.Secrets" Version="4.11.2" />
+
+    <!--
+      The IoT Hub service SDK, for registering devices. 1.x is the supported line: 2.0 has only
+      reached release candidate. RegistryManager.Create(hostName, TokenCredential) authenticates
+      with Microsoft Entra ID, so no hub-level shared access key is involved.
+    -->
+    <PackageReference Include="Microsoft.Azure.Devices" Version="1.41.1" />
+  </ItemGroup>
+
+</Project>
