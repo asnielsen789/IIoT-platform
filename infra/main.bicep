@@ -29,6 +29,10 @@ param iotHubSkuName string = 'F1'
 @maxValue(1000)
 param functionAppMaximumInstanceCount int = 10
 
+@description('GitHub OIDC subject prefix of the repository whose workflows deploy the Function\'s code (#5), exactly as GitHub reports it: `gh api repos/OWNER/REPO/actions/oidc/customization/sub --jq .sub_claim_prefix`. Repositories created after 15 July 2026 use the immutable form `repo:OWNER@OWNER-ID/REPO@REPO-ID`, older ones `repo:OWNER/REPO`.')
+@minLength(6)
+param githubOidcSubjectPrefix string
+
 var workload = 'iiot'
 
 // Region short codes for resource names. To add a region, check that it offers both IoT Hub
@@ -54,6 +58,7 @@ var uniqueSuffix = take(uniqueString(subscription().subscriptionId, environmentN
 var names = {
   resourceGroup: 'rg-${nameStem}'
   identity: 'id-${nameStem}'
+  githubIdentity: 'id-${nameStem}-github'
   logAnalytics: 'log-${nameStem}'
   applicationInsights: 'appi-${nameStem}'
   storageAccount: 'st${replace(nameStem, '-', '')}${uniqueSuffix}'
@@ -163,7 +168,8 @@ module iotHubConnectionSecret 'modules/iot-hub-connection-secret.bicep' = {
   ]
 }
 
-// Created last. Through the module outputs it consumes and the explicit dependency on
+// Created after everything it uses; only the deploy workflow's identity, whose role is on the
+// app, comes later. Through the module outputs it consumes and the explicit dependency on
 // monitoring, the app comes into being only after its identity, its role assignments (in the
 // storage and Key Vault modules) and the secret it references all exist. The secret module
 // depends on the IoT Hub module, so the consumer group the trigger reads exists too.
@@ -189,6 +195,25 @@ module functionApp 'modules/function-app.bicep' = {
   ]
 }
 
+// The identity the deploy workflow (.github/workflows/deploy.yml) logs in with, through OIDC
+// (#5). Its role assignment is on the Function App, so it comes after the app. The GitHub
+// environment it trusts carries the environment's name: `staging` deploys from the GitHub
+// environment `staging`.
+module githubDeployment 'modules/github-deployment.bicep' = {
+  scope: rg
+  params: {
+    name: names.githubIdentity
+    location: location
+    tags: tags
+    githubSubject: '${githubOidcSubjectPrefix}:environment:${environmentName}'
+    credentialName: 'github-${environmentName}'
+    functionAppName: names.functionApp
+  }
+  dependsOn: [
+    functionApp
+  ]
+}
+
 @description('Resource group holding every resource.')
 output resourceGroupName string = rg.name
 
@@ -209,3 +234,6 @@ output storageAccountName string = storage.outputs.name
 
 @description('Application Insights name.')
 output applicationInsightsName string = monitoring.outputs.applicationInsightsName
+
+@description('Client ID of the identity the deploy workflow logs in with: the value of the GitHub environment variable AZURE_CLIENT_ID. An identifier, not a secret.')
+output githubDeploymentClientId string = githubDeployment.outputs.clientId
