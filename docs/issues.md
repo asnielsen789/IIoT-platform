@@ -23,3 +23,4 @@ GitHub issue and removed from this list, so the two never overlap.
 | B4 | Automatic certificate renewal | feature | Key Vault-based rotation of device certificates without downtime. |
 | B5 | OTA firmware updates | feature | Firmware distribution via IoT Hub. |
 | B6 | `IIoT.Contracts` NuGet package | feature | Extract interfaces and models from `IIoT.Core` so external parties can reference them independently. |
+| B7 | Bicep `what-if` on pull requests | infra | Preview infrastructure changes on every pull request that touches `infra/`. Deferred from [#5](https://github.com/asnielsen789/IIoT-platform/issues/5): it needs its own Azure identity with subscription-level rights (`what-if` evaluates the role assignments the templates create), usable from pull-request runs. See ADR-002's update of 2026-10-19. |

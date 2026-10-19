@@ -29,7 +29,7 @@ Purpose: establish the project foundation so the first iteration can start clean
 - [x] Azure resources deployed for the first time — [#9](https://github.com/asnielsen789/IIoT-platform/issues/9)
 - [x] CI: format → build → test on pull requests and pushes to `main` — [#3](https://github.com/asnielsen789/IIoT-platform/issues/3)
 - [x] CI: branch protection requiring the check before merge — [#3](https://github.com/asnielsen789/IIoT-platform/issues/3)
-- [ ] CD: deploy to Azure — [#5](https://github.com/asnielsen789/IIoT-platform/issues/5)
+- [x] CD: deploy the Function's code to Azure; infrastructure stays manual — [#5](https://github.com/asnielsen789/IIoT-platform/issues/5)
 - [ ] AI code review and security review integrated into CI — [#6](https://github.com/asnielsen789/IIoT-platform/issues/6)
 - [ ] GitHub Projects integrated with CI/CD (issue linking, automatic status updates)
 
