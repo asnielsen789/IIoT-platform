@@ -4,11 +4,12 @@ Bicep templates for the platform's Azure resources: IoT Hub with its message rou
 the Function App on a Flex Consumption plan with its storage account, and monitoring.
 
 > [!WARNING]
-> **Nothing here has been deployed yet.** The first deployment belongs to
-> [#9](https://github.com/asnielsen789/IIoT-platform/issues/9) and follows [Deploy](#deploy)
-> below, step by step. A pay-as-you-go subscription has no spending limit, so the budget alert
-> that step 1 checks for is the only early warning of an unexpected bill. Do not run
-> `az deployment sub create` without it.
+> **Infrastructure is deployed by hand,** following [Deploy](#deploy) below, step by step; the
+> pipeline deploys only the Function's code ([Continuous deployment](#continuous-deployment)).
+> Staging was first deployed on 2026-10-15
+> ([#9](https://github.com/asnielsen789/IIoT-platform/issues/9)). A pay-as-you-go subscription
+> has no spending limit, so the budget alert that step 1 checks for is the only early warning of
+> an unexpected bill. Do not run `az deployment sub create` without it.
 
 ## Layout
 
@@ -777,20 +778,19 @@ The IoT Hub sends two resource log categories to the same workspace, where they 
 The other categories are left off. Platform metrics, the routing metrics included, need no
 diagnostic setting.
 
-## Open points for the first deployment
+## What the first deployment confirmed
 
-To check in [#9](https://github.com/asnielsen789/IIoT-platform/issues/9), where they can be
-observed for the first time:
+The open points of the first deployment, as observed in
+[#9](https://github.com/asnielsen789/IIoT-platform/issues/9):
 
-1. **Key Vault reference as a trigger connection.** Microsoft's documentation neither confirms
-   nor rules out that Flex Consumption's scaler resolves a Key Vault reference used as a
-   trigger's connection setting. Step 5 shows the reference resolved; step 7 shows that the
-   trigger connects, and that the app scales out from zero when a message arrives after it has
-   been idle.
-2. **Policy keys on redeployment.** ADR-007's update concludes from the IoT Hub API reference
-   that every deployment generates new keys for all six policies. Confirm it with the key hash
-   under [Re-deploying](#re-deploying), and confirm with step 7 that the Function keeps
-   processing after the step 5 refresh.
-3. **Routing on the message body.** The first message from the test client either takes the
-   `telemetry-v1` route, which confirms routing and the documented MQTT property bag together,
-   or lands in the fallback count, which points at the property bag. Step 7 tells which.
+1. **Key Vault reference as a trigger connection: confirmed** (2026-10-15). On Flex
+   Consumption the reference resolves (step 5), the trigger connects and processes messages
+   (step 7), and the app scales out from zero: after four idle days, a message was processed
+   about 11 s after IoT Hub enqueued it (2026-10-19).
+2. **Policy keys on redeployment: still open.** ADR-007's update concludes from the IoT Hub API
+   reference that every deployment generates new keys for all six policies. The next
+   infrastructure deployment confirms it with the key hash under [Re-deploying](#re-deploying),
+   and step 7 shows whether the Function keeps processing after the step 5 refresh.
+3. **Routing on the message body: confirmed** (2026-10-15). The test client's message took the
+   `telemetry-v1` route, with no message in the fallback count, which confirms routing and the
+   documented MQTT property bag together.
