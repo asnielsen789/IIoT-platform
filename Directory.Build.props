@@ -8,4 +8,45 @@
     <Nullable>enable</Nullable>
   </PropertyGroup>
 
+  <!--
+    NuGet Audit: a package with a known high or critical vulnerability fails the restore, wherever
+    it sits in the dependency graph.
+
+    Dependabot's version updates see only the packages a project references directly. NuGet Audit
+    checks every package in the restored graph, transitive ones included, against nuget.org's
+    vulnerability data (the GitHub Advisory Database) on every restore. By default it only warns,
+    and a warning in the Restore step does not fail CI.
+
+    - NuGetAuditMode=all. The .NET 10 SDK already defaults to all, but only for projects that
+      target net10.0 or later (NuGet.targets in the SDK); a project targeting an older framework
+      would silently fall back to direct. Stated here so that it cannot.
+    - NuGetAuditLevel stays at its default, low: low and moderate advisories are still reported,
+      as warnings.
+    - NU1903 (high) and NU1904 (critical) are errors. NU1900, the vulnerability data could not be
+      fetched, stays a warning, so that a transient fault on nuget.org does not block merging by
+      itself. It is a gap while it lasts, visible in the Restore step's log.
+
+    The consequence is intended (fail closed): an advisory published against a package that is
+    already in the graph fails the next restore with no change to the repository. Until that
+    package is updated, `Format, build and test` fails on every pull request and on main, so
+    nothing merges, and the restore in deploy.yml fails, so nothing deploys. Local builds fail
+    too. The fix is to update the package; for a transitive one whose parent has no fixed
+    release yet, a direct reference to the fixed version lifts it (as IIoT.Functions does for
+    Azure.Messaging.EventHubs). Only where no fixed version exists, a NuGetAuditSuppress item
+    with the advisory URL and the reason is the documented, reviewable exception.
+
+    Not covered: the Functions extensions project that Azure.Functions.Sdk generates under
+    src/IIoT.Functions/obj/azure_functions/. The SDK sets ImportDirectoryBuildProps=false and
+    net8.0 for it, so it never reads this file and is audited with NuGet's defaults for net8.0:
+    its direct package only, and as a warning
+    (https://github.com/asnielsen789/IIoT-platform/issues/35).
+
+    https://learn.microsoft.com/nuget/concepts/auditing-packages
+  -->
+  <PropertyGroup>
+    <NuGetAudit>true</NuGetAudit>
+    <NuGetAuditMode>all</NuGetAuditMode>
+    <WarningsAsErrors>$(WarningsAsErrors);NU1903;NU1904</WarningsAsErrors>
+  </PropertyGroup>
+
 </Project>
