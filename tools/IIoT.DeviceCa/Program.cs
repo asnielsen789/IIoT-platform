@@ -59,9 +59,10 @@ public static class Program
         catch (RequestFailedException ex) when (ex.Status == 403)
         {
             await Console.Error.WriteLineAsync(
-                $"Key Vault refused the request ({ex.ErrorCode}). Signing needs Key Vault Crypto User and the CA " +
-                "certificates need Key Vault Secrets Officer, both on the vault; see infra/README.md, " +
-                "\"Device certificate authority (one-time)\". A new role assignment can take a few minutes to apply.");
+                $"Key Vault refused the request ({ex.ErrorCode}). Signing needs Key Vault Crypto User on the CA key; " +
+                "creating the CA certificates (init) needs Key Vault Secrets Officer, and reading them Key Vault " +
+                "Secrets User; see infra/README.md, \"Device certificate authority (one-time)\". A new role " +
+                "assignment can take a few minutes to apply.");
             return 1;
         }
         catch (UnauthorizedException ex)
