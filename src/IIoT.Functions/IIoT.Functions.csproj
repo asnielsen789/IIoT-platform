@@ -1,7 +1,21 @@
 <Project Sdk="Azure.Functions.Sdk">
 
   <ItemGroup>
+    <!--
+      Not for HTTP: the app has no HTTP functions and no ASP.NET Core integration. Microsoft's
+      isolated-worker guide recommends this reference for every .NET app as a cold-start
+      optimisation ("Performance optimizations"), and it supplies Microsoft.Extensions.* from the
+      shared framework, which restore then prunes from the package graph and the SBOM.
+    -->
     <FrameworkReference Include="Microsoft.AspNetCore.App" />
+    <!--
+      Referenced directly to hold it where it was. The worker's own core and gRPC assemblies, the
+      Event Hubs SDK and Application Insights all load Azure.Core, and until Microsoft.Extensions.Azure
+      was removed (unused: no assembly in the worker references it) its 1.14.1 was what lifted
+      Azure.Core to 1.61.0. Without this, restore resolves 1.49.0. Raising it is a change of its own:
+      1.62.0 and 1.63.0 list breaking changes in the credential types.
+    -->
+    <PackageReference Include="Azure.Core" Version="1.61.0" />
     <!--
       Referenced directly to lift it above the 5.11.5 that the Event Hubs worker extension pulls
       in. On 5.11.5, EventData.EnqueuedTime casts the enqueued-time annotation to DateTimeOffset,
@@ -21,8 +35,6 @@
     <PackageReference Include="Microsoft.Azure.Functions.Worker" Version="2.52.0" />
     <PackageReference Include="Microsoft.Azure.Functions.Worker.ApplicationInsights" Version="2.51.0" />
     <PackageReference Include="Microsoft.Azure.Functions.Worker.Extensions.EventHubs" Version="6.5.0" />
-    <PackageReference Include="Microsoft.Azure.Functions.Worker.Extensions.Http.AspNetCore" Version="2.1.1" />
-    <PackageReference Include="Microsoft.Extensions.Azure" Version="1.14.1" />
     <PackageReference Include="Microsoft.Extensions.Http.Resilience" Version="10.11.0" />
   </ItemGroup>
 
