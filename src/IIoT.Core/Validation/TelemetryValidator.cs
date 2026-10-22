@@ -40,6 +40,14 @@ public static class TelemetryValidator
         IncludeApplicatorErrors = false
     };
 
+    /// <summary>
+    /// A repeated member name is refused at parse time. JSON Schema leaves its meaning undefined
+    /// (2020-12 core, section 4.2.1), and in practice the evaluator checked the first value while
+    /// the deserialiser kept the last: <c>"value": 1432.5, "value": -50000</c> passed
+    /// <c>"minimum": 0</c> and was forwarded as -50000.
+    /// </summary>
+    private static readonly JsonDocumentOptions DocumentOptions = new() { AllowDuplicateProperties = false };
+
     /// <summary>Validates <paramref name="payload"/> and deserialises it on success.</summary>
     public static TelemetryValidationResult Validate(string payload)
     {
@@ -49,7 +57,7 @@ public static class TelemetryValidator
         JsonDocument document;
         try
         {
-            document = JsonDocument.Parse(payload);
+            document = JsonDocument.Parse(payload, DocumentOptions);
         }
         catch (JsonException ex)
         {

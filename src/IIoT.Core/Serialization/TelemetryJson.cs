@@ -46,7 +46,16 @@ public static partial class TelemetryJson
         {
             // The contract is camelCase; the models are PascalCase.
             PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-            PropertyNameCaseInsensitive = true,
+
+            // Case-sensitive, as the schema is. The schema validates "value"; to it, "Value" is an
+            // unknown field and goes unchecked. Matched without regard to case, "Value": -50000
+            // would have bound to the model in place of the "value" the schema had just approved.
+            PropertyNameCaseInsensitive = false,
+
+            // One value per member, or the schema and the model can read different ones. The
+            // validator refuses a repeated name when it parses the document; this keeps the options
+            // safe on their own.
+            AllowDuplicateProperties = false,
 
             // Unknown fields are ignored, not rejected — evolution rules, section 6.
             UnmappedMemberHandling = JsonUnmappedMemberHandling.Skip
