@@ -58,3 +58,67 @@ jobs:
 
       - name: Test
         run: dotnet test IIoT.slnx --no-build --configuration Release
+
+      # The Bicep templates are compiled and linted on every pull request, so a broken
+      # template cannot merge green. Infrastructure is deployed by hand (infra/README.md), and
+      # without these steps the first place a broken template would show is that deployment.
+      # All of it is offline: no Azure sign-in, and no permission beyond contents: read.
+      #
+      # The Bicep CLI is an exact release, downloaded from GitHub and checked against a SHA-256
+      # recorded here, the way the actions above are pinned to commit SHAs. Neither
+      # `az bicep install`, which takes the latest release and verifies nothing, nor whatever
+      # Bicep the runner image happens to carry would make a run reproducible.
+      #
+      # Bumped by hand: Dependabot cannot track a binary downloaded by URL. To bump, pick a
+      # release at least two weeks old from https://github.com/Azure/bicep/releases, download
+      # its bicep-linux-x64 asset, hash it with `sha256sum`, check the hash against the
+      # digest the release lists for that asset, and update both values below.
+      # infra/README.md asks for Bicep 0.48 or later locally.
+      - name: Install Bicep CLI
+        env:
+          BICEP_VERSION: v0.48.1
+          BICEP_SHA256: b09ec25a9d376c1f8e33ede6ed22b587f915ad68488d5db77a6f9541748c7f6e
+        run: |
+          dir="$RUNNER_TEMP/bicep-cli"
+          mkdir -p "$dir"
+          curl --fail --silent --show-error --location --retry 3 \
+            --output "$dir/bicep" \
+            "https://github.com/Azure/bicep/releases/download/$BICEP_VERSION/bicep-linux-x64"
+          echo "$BICEP_SHA256  $dir/bicep" | sha256sum --check --strict
+          chmod +x "$dir/bicep"
+          "$dir/bicep" --version
+          # Later steps call this binary by its full path, never a `bicep` found on PATH.
+          echo "BICEP=$dir/bicep" >> "$GITHUB_ENV"
+
+      # Compiles main.bicep and every module it references into ARM JSON. The output goes to
+      # the runner's temp directory, not next to the template.
+      - name: Build Bicep template
+        run: |
+          "$BICEP" build infra/main.bicep --outdir "$RUNNER_TEMP/bicep"
+
+      # Checks the parameter file against the template it uses: names, types and allowed values.
+      - name: Build Bicep parameters
+        run: |
+          "$BICEP" build-params infra/environments/staging.bicepparam --outdir "$RUNNER_TEMP/bicep"
+
+      # Linting the parameter file lints the whole deployment: the parameter file, main.bicep
+      # and every module main.bicep references.
+      #
+      # An error fails `bicep lint` through its exit code. A warning does not, so the second
+      # run counts them in its SARIF output, where a warning is a result without a level; an
+      # error has level "error" and an info "note". The templates lint clean, so any warning
+      # is new, and it fails the step. A rule that should not block can be set to "info" or
+      # "off" in a bicepconfig.json in infra/: a change that shows in review, and one that
+      # `az bicep` and the editor read too. Each command's failure fails the step (bash -e),
+      # including a jq that cannot read the SARIF, so a lint that did not run cannot pass.
+      - name: Lint Bicep
+        run: |
+          "$BICEP" lint infra/environments/staging.bicepparam
+          sarif="$RUNNER_TEMP/bicep-lint.sarif"
+          "$BICEP" lint infra/environments/staging.bicepparam --diagnostics-format sarif > "$sarif"
+          warnings=$(jq '[.runs[].results[] | select((.level // "warning") == "warning")] | length' "$sarif")
+          if [ "$warnings" -ne 0 ]; then
+            echo "::error title=Bicep lint::$warnings Bicep warning(s), listed above."
+            exit 1
+          fi
+          echo "Bicep lint: no errors and no warnings."
