@@ -46,6 +46,8 @@ the Function App on a Flex Consumption plan with its storage account, and monito
 - To set up continuous deployment once: the GitHub CLI (`gh`), signed in with admin rights on
   the repository.
 - To check routing and to register devices: the `azure-iot` extension for the Azure CLI.
+- To run the device certificate authority: the .NET SDK that `global.json` pins, and the roles
+  in [Device certificate authority (one-time)](#device-certificate-authority-one-time).
 
 ## Build and preview
 
@@ -600,6 +602,227 @@ has an empty deployment container until it does.
   branch policy refused it, as it should. (`deploy.yml` itself skips the deploy job off `main`.)
 - **AuthorizationFailed** right after the identity was created: its role assignment has not
   propagated yet. Re-run the failed job a few minutes later.
+
+## Device certificate authority (one-time)
+
+Sets up the device CA of [ADR-009](../docs/adr/adr-009-device-pki.md) once its keys exist, and
+issues the first device certificate. Steps 1 to 3 are once per CA: the keys survive every
+infrastructure deployment ([Device certificate authority](#device-certificate-authority)), and so
+do the certificates the tool stores next to them. Steps 4 and 5 are per device. The tool is
+described in [`tools/IIoT.DeviceCa`](../tools/IIoT.DeviceCa/README.md), the device side in the
+[test client's README](../tools/IIoT.TestClient/README.md#certificate-authentication).
+
+> [!NOTE]
+> This procedure has not yet run against staging. The first run is the live test of
+> [#11](https://github.com/asnielsen789/IIoT-platform/issues/11); until then, what it says to
+> expect is what the code and Microsoft's documentation lead to expect.
+
+Run from the repository root in Git Bash, signed in with `az login` as the operator, in the
+shell where `RG`, `IOT_HUB` and `KEY_VAULT` are set (step 3 of [Deploy](#deploy)). The tool
+signs in through the same Azure CLI session; if Visual Studio is signed in with another
+account, `export AZURE_TOKEN_CREDENTIALS=azureclicredential` first, since Visual Studio comes
+before the Azure CLI. Device files go to `~/.secrets/iiot`, outside the repository. The private
+key never leaves that directory; everything else is public.
+
+### 1. Assign the operator's roles
+
+Every operation the tool performs is data-plane, authorised by Azure RBAC with your Microsoft
+Entra sign-in. Four built-in roles cover it, each on the narrowest scope the operation allows:
+
+| Role | Scope | Needed for |
+|---|---|---|
+| Key Vault Crypto User | Each of the keys `device-ca-root` and `device-ca-issuing` | Signing: `keys/read` and `keys/sign/action`. `init` signs with both keys, `issue` only with the issuing key |
+| Key Vault Secrets Officer | The vault, until `init` has run | Creating the secrets `device-ca-root-certificate` and `device-ca-issuing-certificate` |
+| Key Vault Secrets User | Each of those two secrets, after `init` | Reading them: `secrets/getSecret/action`, for `issue` and `ca-certificate` |
+| IoT Hub Registry Contributor | The IoT hub | Looking up and registering devices: `IotHubs/devices/read` and `IotHubs/devices/write` |
+
+The data actions are from Microsoft's
+[built-in roles for security](https://learn.microsoft.com/azure/role-based-access-control/built-in-roles/security)
+and for [Internet of Things](https://learn.microsoft.com/azure/role-based-access-control/built-in-roles/internet-of-things),
+and from [Control access to IoT Hub with Microsoft Entra ID](https://learn.microsoft.com/azure/iot-hub/authenticate-authorize-azure-ad#permissions-for-iot-hub-service-apis).
+
+- **Why per key and per secret.** Microsoft recommends roles at vault scope and per-object
+  assignments only as an exception
+  ([Azure RBAC for Key Vault](https://learn.microsoft.com/azure/key-vault/general/rbac-guide#best-practices-for-individual-keys-secrets-and-certificates-role-assignments)).
+  This vault is the exception it describes: it is shared, and also holds the Function's
+  connection string `iothub-telemetry-connection`. At vault scope, the operator could read that
+  secret and sign with any key the vault ever holds; on the CA's own objects, the roles reach
+  nothing else.
+- **Why Secrets Officer on the vault, and only for `init`.** The two certificate secrets do not
+  exist until `init` creates them, so there is nothing narrower to assign it on. Remove it
+  once `init` has run; reading the certificates afterwards needs only Secrets User on them.
+- **The hub is the narrowest IoT Hub scope.** IoT Hub supports no role assignment below an
+  individual hub. Registry Contributor also allows deleting devices; a custom role without
+  `devices/delete`, like one with only `keys/read` and `keys/sign/action` instead of Crypto User
+  (which can also update and back up the keys), is a candidate for the
+  [security review (#21)](https://github.com/asnielsen789/IIoT-platform/issues/21).
+- Assigning roles needs `Microsoft.Authorization/roleAssignments/write`, which Owner has
+  ([Prerequisites](#prerequisites)).
+
+```sh
+ME=$(az ad signed-in-user show --query id -o tsv | tr -d '\r')
+KV_ID=$(az keyvault show --name "$KEY_VAULT" --resource-group "$RG" --query id -o tsv | tr -d '\r')
+HUB_ID=$(az iot hub show --name "$IOT_HUB" --resource-group "$RG" --query id -o tsv | tr -d '\r')
+
+assign() {
+  az role assignment create --assignee-object-id "$ME" --assignee-principal-type User \
+    --role "$1" --scope "$2" --query roleDefinitionName -o tsv
+}
+
+assign "Key Vault Crypto User" "$KV_ID/keys/device-ca-root"
+assign "Key Vault Crypto User" "$KV_ID/keys/device-ca-issuing"
+assign "Key Vault Secrets Officer" "$KV_ID"
+assign "IoT Hub Registry Contributor" "$HUB_ID"
+```
+
+Each assignment prints its role name. The resource IDs contain the subscription ID, so they stay
+in variables and are never printed. Allow a few minutes before step 2: a new role assignment is
+not applied at once
+([Azure RBAC for Key Vault](https://learn.microsoft.com/azure/key-vault/general/rbac-guide#test-and-verify)).
+
+### 2. Create the CA certificates
+
+```sh
+dotnet run --project tools/IIoT.DeviceCa -- init --vault "$KEY_VAULT"
+```
+
+It worked when it prints `Stored the CA certificates in kv-iiot-staging-neu-xxxx` with the
+subjects `CN=IIoT Device Root CA` and `CN=IIoT Device Issuing CA`, their validity and their
+SHA-256 thumbprints. "Key Vault refused the request" means a role assignment from step 1 has not
+applied yet: wait and run it again. If the vault holds CA certificates already, `init` changes
+nothing and says so; go on to step 3, and use `--force` only to start the CA again (see
+[`init`](../tools/IIoT.DeviceCa/README.md#init-create-the-ca-certificates)).
+
+Then trade Secrets Officer on the vault for Secrets User on the two certificates:
+
+```sh
+az role assignment delete --assignee "$ME" --role "Key Vault Secrets Officer" --scope "$KV_ID"
+assign "Key Vault Secrets User" "$KV_ID/secrets/device-ca-root-certificate"
+assign "Key Vault Secrets User" "$KV_ID/secrets/device-ca-issuing-certificate"
+```
+
+### 3. Register the issuing CA certificate in IoT Hub
+
+Export the issuing CA certificate, the one IoT Hub authenticates devices against, and register it
+as verified:
+
+```sh
+mkdir -p ~/.secrets/iiot
+dotnet run --project tools/IIoT.DeviceCa -- ca-certificate --vault "$KEY_VAULT" \
+  --out ~/.secrets/iiot/device-ca-issuing.pem
+
+az iot hub certificate create --hub-name "$IOT_HUB" --resource-group "$RG" \
+  --name device-ca-issuing --path ~/.secrets/iiot/device-ca-issuing.pem --verified \
+  --query "{name:name, verified:properties.isVerified, subject:properties.subject, thumbprint:properties.thumbprint}" -o table
+```
+
+It worked when the table shows `device-ca-issuing`, `True`, `CN=IIoT Device Issuing CA` and the
+SHA-1 thumbprint `ca-certificate` printed. The command and its `--verified` flag are documented in
+the [Azure CLI reference](https://learn.microsoft.com/cli/azure/iot/hub/certificate#az-iot-hub-certificate-create);
+`--verified` sets the certificate's status to verified on upload, as Microsoft's own walkthrough
+does for a subordinate CA
+([Create and upload certificates for testing](https://learn.microsoft.com/azure/iot-hub/tutorial-x509-test-certs#register-your-subordinate-ca-certificate-to-your-iot-hub)),
+instead of answering a proof-of-possession challenge, which the tool does not implement.
+
+- **Registered: the issuing CA, not the root.** The issuing CA signs the devices, so a device
+  certificate chains to it directly. The root never appears in IoT Hub.
+- **Control plane, not data plane.** Registering a CA certificate is an operation on the hub
+  resource, `Microsoft.Devices/iotHubs/certificates/Write`, which Owner and Contributor include.
+  An operator without them needs a role with that action on the hub; among the built-in roles,
+  Azure Device Registry Contributor has it (`iothubs/certificates/*`, `iothubs/read` and the
+  device data actions) without any other write on the hub
+  ([built-in roles for Internet of Things](https://learn.microsoft.com/azure/role-based-access-control/built-in-roles/internet-of-things#azure-device-registry-contributor)).
+- **Shared access keys stay on.** Registering a CA adds a way to authenticate; devices with keys,
+  such as `tank-000001` from step 7 of [Deploy](#deploy), keep working. Turning device keys off
+  belongs to the security review ([#21](https://github.com/asnielsen789/IIoT-platform/issues/21)).
+
+### 4. Issue a device certificate
+
+A new device, because `issue` never changes how an existing one authenticates, and `tank-000001`
+uses a key. First its key and CSR, made by the test client as device firmware would, then the
+certificate:
+
+```sh
+DEVICE=tank-000002
+dotnet run --project tools/IIoT.TestClient -- create-csr --device-id "$DEVICE"
+
+dotnet run --project tools/IIoT.DeviceCa -- issue --vault "$KEY_VAULT" --hub "$IOT_HUB" \
+  --csr ~/.secrets/iiot/"$DEVICE".csr.pem --device-id "$DEVICE" --out ~/.secrets/iiot
+```
+
+`issue` writes `tank-000002.cert.pem` and `tank-000002.chain.pem` next to the key and registers
+the device. Check the registration: expect `certificateAuthority` and `enabled`.
+
+```sh
+az iot hub device-identity show --hub-name "$IOT_HUB" --device-id "$DEVICE" \
+  --query "{auth:authentication.type, status:status}" -o table
+```
+
+### 5. Connect the test client with it
+
+Check the files without connecting, then send one valid message:
+
+```sh
+dotnet run --project tools/IIoT.TestClient -- --hub "$IOT_HUB" --device-id "$DEVICE" \
+  --cert ~/.secrets/iiot/"$DEVICE".chain.pem --key ~/.secrets/iiot/"$DEVICE".key.pem --once --dry-run
+
+dotnet run --project tools/IIoT.TestClient -- --hub "$IOT_HUB" --device-id "$DEVICE" \
+  --cert ~/.secrets/iiot/"$DEVICE".chain.pem --key ~/.secrets/iiot/"$DEVICE".key.pem --once
+```
+
+The dry run prints the certificate (`CN=tank-000002`, issued by `CN=IIoT Device Issuing CA`).
+The real run worked when it prints `connected: Success` and the message `-> Success`. Then
+confirm the message as in step 7 of [Deploy](#deploy): one more message in
+`d2c.telemetry.ingress.success` and none in `d2c.telemetry.egress.fallback`, a `Connections` log
+entry for `tank-000002`, and `Device tank-000002 measured level=...` in the Function's log. A
+`DEVICE_KEY` still exported from step 7 is ignored: `--cert` selects the certificate.
+
+If it does not connect:
+
+| Symptom | Likely cause |
+|---|---|
+| The client refuses before connecting, naming the certificate's CN | The `--cert` file is another device's; the CN must be the device ID |
+| The TLS handshake fails | The issuing CA certificate is not registered or not verified (step 3), or IoT Hub wants the chain sent; see the open points below |
+| `MqttConnectingFailedException` with `NotAuthorized` or `BadUserNameOrPassword`, or the connection closes right after the handshake | The device is not registered as CA-authenticated or is disabled (step 4), or IoT Hub does not accept the empty password; see the open points below |
+
+**Revoking a device** is disabling it, since IoT Hub does not check revocation lists
+([Revoke a device certificate](https://learn.microsoft.com/azure/iot-hub/authenticate-authorize-x509#revoke-a-device-certificate)).
+The next connection is refused:
+
+```sh
+az iot hub device-identity update --hub-name "$IOT_HUB" --device-id "$DEVICE" --status disabled
+```
+
+### After the hub is recreated
+
+Tearing down deletes the hub with its CA certificate registration and its devices. The vault
+goes into soft delete; if it is recovered, the CA and every certificate it issued stay valid.
+Then repeat step 3, and register each certificate device again, which `issue` will not do for a
+device whose certificate files exist:
+
+```sh
+az iot hub device-identity create --hub-name "$IOT_HUB" --device-id tank-000002 --am x509_ca
+```
+
+If the vault was purged instead, the CA is gone: see [Tearing down](#tearing-down).
+
+### Open points for the first run
+
+Three things nothing offline can settle; the first run records the answers in
+[#11](https://github.com/asnielsen789/IIoT-platform/issues/11):
+
+1. **The device certificate alone.** The test client sends its certificate without the issuing
+   CA ([why](../tools/IIoT.TestClient/README.md#what-goes-on-the-wire)). Microsoft's overview
+   says the device "presents its full certificate chain and the IoT hub can validate it because
+   it knows the X.509 CA"
+   ([Authenticate with X.509 certificates](https://learn.microsoft.com/azure/iot-hub/authenticate-authorize-x509#types-of-certificate-authentication));
+   with the issuing CA registered, the chain up to the CA the hub knows is the device
+   certificate alone.
+2. **The empty password.** IoT Hub needs no password from a certificate device; the client sends
+   the field empty rather than leaving it out.
+3. **Redeployment.** The CA certificate is a child resource of the hub that the templates do not
+   declare, so an incremental deployment should leave it registered. After the next
+   infrastructure deployment, check `az iot hub certificate list --hub-name "$IOT_HUB" --query "[].name" -o tsv`.
 
 ## Naming
 
