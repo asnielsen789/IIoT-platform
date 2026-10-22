@@ -232,19 +232,57 @@ public class ForwardingPipelineTests : IAsyncLifetime
     }
 
     /// <summary>
-    /// The gateway refuses a token the platform still considers valid — here, one issued for the
-    /// wrong audience. The 401 is not retried, but the token is discarded, so once the provider
-    /// issues good tokens again the next message gets one instead of failing until expiry.
+    /// The identity provider rotates its signing key. The platform's cached token was signed with
+    /// the old key and is still within its lifetime, but the gateway — validating real RS256 JWTs —
+    /// no longer trusts that key and answers 401. The platform discards the token, obtains one
+    /// signed with the new key, and sends the same request once more: the message is delivered
+    /// rather than lost, and the gateway stores the batch exactly once.
     /// </summary>
     [Fact]
-    public async Task RejectedToken_FailsWithoutRetry_AndIsReplacedForTheNextMessage()
+    public async Task SigningKeyRotation_TheMessageIsDeliveredWithANewToken_AndStoredOnce()
+    {
+        _issuer.TokensSignedWithRetiredKey = 1;
+
+        var outcome = await _pipeline.ProcessAsync(ContractFixtures.ReadDevice("valid-full.json"), AuthenticatedDevice, EnqueuedAt);
+
+        Assert.Equal(ProcessingOutcome.Forwarded, outcome);
+        Assert.Equal(new[] { HttpStatusCode.Unauthorized, HttpStatusCode.Accepted }, _pipeline.Traffic.Responses);
+        Assert.Equal(2, _issuer.TokenRequests);
+
+        // The same Idempotency-Key both times, so a gateway that had stored the first attempt would
+        // have deduplicated the second.
+        Assert.Equal(
+            new[] { "01J8F2K9QS4T7V0X3Z6B8N1M5B", "01J8F2K9QS4T7V0X3Z6B8N1M5B" },
+            _pipeline.Traffic.IdempotencyKeys);
+
+        var stored = Assert.Single(_gateway.Store.Batches);
+        Assert.Equal("01J8F2K9QS4T7V0X3Z6B8N1M5B", stored.IdempotencyKey);
+        Assert.Equal(TestTokenIssuer.Subject, stored.Caller);
+
+        // The new token is cached: the next message needs neither a retry nor a token request.
+        Assert.Equal(
+            ProcessingOutcome.Forwarded,
+            await _pipeline.ProcessAsync(ContractFixtures.ReadDevice("valid-minimal.json"), AuthenticatedDevice, EnqueuedAt));
+        Assert.Equal(2, _issuer.TokenRequests);
+        Assert.Equal(3, _pipeline.Traffic.Attempts);
+    }
+
+    /// <summary>
+    /// The gateway refuses even a newly obtained token — here, every token is issued for the wrong
+    /// audience. That is an authentication failure, not a stale token: one retry, then
+    /// ForwardingFailed, with no loop of token requests. Once the provider issues good tokens again,
+    /// the next message recovers through the same single retry.
+    /// </summary>
+    [Fact]
+    public async Task TokenRejectedTwice_FailsAfterOneRetry_AndTheNextMessageRecovers()
     {
         _issuer.IssuedAudience = "https://some-other-api.iiot.test";
 
         var refused = await _pipeline.ProcessAsync(ContractFixtures.ReadDevice("valid-full.json"), AuthenticatedDevice, EnqueuedAt);
 
         Assert.Equal(ProcessingOutcome.ForwardingFailed, refused);
-        Assert.Equal(new[] { HttpStatusCode.Unauthorized }, _pipeline.Traffic.Responses);
+        Assert.Equal(new[] { HttpStatusCode.Unauthorized, HttpStatusCode.Unauthorized }, _pipeline.Traffic.Responses);
+        Assert.Equal(2, _issuer.TokenRequests);
         Assert.Empty(_gateway.Store.Batches);
 
         _issuer.IssuedAudience = TestTokenIssuer.Audience;
@@ -252,7 +290,46 @@ public class ForwardingPipelineTests : IAsyncLifetime
         var delivered = await _pipeline.ProcessAsync(ContractFixtures.ReadDevice("valid-minimal.json"), AuthenticatedDevice, EnqueuedAt);
 
         Assert.Equal(ProcessingOutcome.Forwarded, delivered);
+        Assert.Equal(3, _issuer.TokenRequests);
+        Assert.Single(_gateway.Store.Batches);
+    }
+
+    /// <summary>
+    /// The two retry mechanisms compose rather than stack. A transient 503 is retried inside the
+    /// resilience pipeline; the 401 that follows ends that pass, since 401 is not transient; the
+    /// forwarder's own retry then delivers with a new token. One batch is stored.
+    /// </summary>
+    [Fact]
+    public async Task TransientFailureThenRotatedKey_BothAreRetried_AndTheBatchStoredOnce()
+    {
+        _issuer.TokensSignedWithRetiredKey = 1;
+        _pipeline.Traffic.Fault = attempt => attempt == 1 ? HttpStatusCode.ServiceUnavailable : null;
+
+        var outcome = await _pipeline.ProcessAsync(ContractFixtures.ReadDevice("valid-full.json"), AuthenticatedDevice, EnqueuedAt);
+
+        Assert.Equal(ProcessingOutcome.Forwarded, outcome);
+        Assert.Equal(
+            new[] { HttpStatusCode.ServiceUnavailable, HttpStatusCode.Unauthorized, HttpStatusCode.Accepted },
+            _pipeline.Traffic.Responses);
+        Assert.Single(_gateway.Store.Batches);
+    }
+
+    /// <summary>
+    /// The bound on the worst case. The retry after a 401 is a second pass through the resilience
+    /// pipeline, with its own transient retries — but only one: a gateway that then stays down costs
+    /// the first attempt plus one full pipeline pass (1 + 4 attempts), never a loop.
+    /// </summary>
+    [Fact]
+    public async Task RetryAfterUnauthorized_RunsThroughTheResiliencePipelineOnce_AndIsBounded()
+    {
+        _pipeline.Traffic.Fault = attempt => attempt == 1 ? HttpStatusCode.Unauthorized : HttpStatusCode.ServiceUnavailable;
+
+        var outcome = await _pipeline.ProcessAsync(ContractFixtures.ReadDevice("valid-full.json"), AuthenticatedDevice, EnqueuedAt);
+
+        Assert.Equal(ProcessingOutcome.ForwardingFailed, outcome);
+        Assert.Equal(5, _pipeline.Traffic.Attempts);
         Assert.Equal(2, _issuer.TokenRequests);
+        Assert.Empty(_gateway.Store.Batches);
     }
 
     /// <summary>

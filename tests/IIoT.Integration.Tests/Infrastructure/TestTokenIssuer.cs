@@ -29,14 +29,35 @@ public sealed class TestTokenIssuer : IDisposable
     public const string Subject = ClientId + "@clients";
 
     private readonly RSA _rsa = RSA.Create(2048);
+    private readonly RSA _retiredRsa = RSA.Create(2048);
     private int _tokenRequests;
 
     public TestTokenIssuer()
     {
         SigningKey = new RsaSecurityKey(_rsa) { KeyId = Guid.NewGuid().ToString("N") };
+        RetiredSigningKey = new RsaSecurityKey(_retiredRsa) { KeyId = Guid.NewGuid().ToString("N") };
     }
 
     public RsaSecurityKey SigningKey { get; }
+
+    /// <summary>
+    /// A key the provider signed with before it rotated to <see cref="SigningKey"/>. The gateway is
+    /// never given it, so it rejects every token signed with it, as a gateway does once it has
+    /// dropped a rotated-out key.
+    /// </summary>
+    public RsaSecurityKey RetiredSigningKey { get; }
+
+    /// <summary>
+    /// How many of the next tokens the endpoint signs with <see cref="RetiredSigningKey"/> before it
+    /// moves on to <see cref="SigningKey"/>. Simulates signing-key rotation: a token the platform
+    /// obtained before the rotation is still within its lifetime, so its cache hands it out, but the
+    /// gateway no longer trusts the key that signed it.
+    /// </summary>
+    /// <remarks>
+    /// Not synchronised: the platform's token provider lets only one refresh run at a time, so the
+    /// endpoint is never called concurrently.
+    /// </remarks>
+    public int TokensSignedWithRetiredKey { get; set; }
 
     /// <summary>The client secret the token endpoint expects. Generated per run.</summary>
     public string ClientSecret { get; } = Convert.ToBase64String(RandomNumberGenerator.GetBytes(32));
@@ -98,7 +119,11 @@ public sealed class TestTokenIssuer : IDisposable
         return new JsonWebTokenHandler().CreateToken(descriptor);
     }
 
-    public void Dispose() => _rsa.Dispose();
+    public void Dispose()
+    {
+        _rsa.Dispose();
+        _retiredRsa.Dispose();
+    }
 
     private sealed class TokenEndpointHandler : HttpMessageHandler
     {
@@ -135,7 +160,14 @@ public sealed class TestTokenIssuer : IDisposable
                 return Error(HttpStatusCode.Forbidden, "access_denied");
             }
 
-            var token = _issuer.CreateToken(audience: _issuer.IssuedAudience);
+            SigningCredentials? signingCredentials = null;
+            if (_issuer.TokensSignedWithRetiredKey > 0)
+            {
+                _issuer.TokensSignedWithRetiredKey--;
+                signingCredentials = new SigningCredentials(_issuer.RetiredSigningKey, SecurityAlgorithms.RsaSha256);
+            }
+
+            var token = _issuer.CreateToken(audience: _issuer.IssuedAudience, signingCredentials: signingCredentials);
             return Json(HttpStatusCode.OK, new { access_token = token, token_type = "Bearer", expires_in = 3600 });
         }
 
