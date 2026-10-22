@@ -45,6 +45,9 @@ public static class Program
 
         try
         {
+            if (OperatorSignIn.Problem(Environment.GetEnvironmentVariable(OperatorSignIn.SelectionVariable)) is { } signInProblem)
+                throw new CaRefusedException(signInProblem);
+
             await RunAsync(command, CreateCredential(), cancellation.Token);
             return 0;
         }
@@ -88,8 +91,10 @@ public static class Program
     /// <summary>
     /// The operator's own sign-in. ADR-009: the tool "is run by an operator, never by the Function
     /// or CI", so the credentials a machine or a pipeline would bring — environment variables,
-    /// workload identity, managed identity — are excluded, and only developer sign-ins remain
-    /// (Azure CLI first in practice, as the README uses).
+    /// workload identity, managed identity — are excluded, and only developer sign-ins remain:
+    /// in Azure.Identity 1.21's order Visual Studio, VS Code, Azure CLI, Azure PowerShell, Azure
+    /// Developer CLI and the broker. <c>AZURE_TOKEN_CREDENTIALS</c> can override the exclusions,
+    /// so <c>Main</c> checks it first (<see cref="OperatorSignIn"/>).
     /// </summary>
     internal static TokenCredential CreateCredential() => new DefaultAzureCredential(new DefaultAzureCredentialOptions
     {
