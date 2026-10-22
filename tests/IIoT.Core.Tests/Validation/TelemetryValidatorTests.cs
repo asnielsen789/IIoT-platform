@@ -123,6 +123,47 @@ public class TelemetryValidatorTests
     }
 
     /// <summary>
+    /// Consumer obligation 1 holds at every level of the message, not only where the fixture puts
+    /// its unknown fields. <c>device.battery</c> was the one object whose schema said otherwise, so
+    /// a firmware that added a field there would have had every one of its messages rejected.
+    /// </summary>
+    [Theory]
+    [InlineData("root")]
+    [InlineData("measurement")]
+    [InlineData("device")]
+    [InlineData("battery")]
+    [InlineData("signal")]
+    public void Validate_UnknownField_IsIgnoredAtEveryLevel(string level)
+    {
+        var payload = level switch
+        {
+            "root" => InlinePayload.Telemetry(extraRootMember: "\"bearer\": \"nb-iot\""),
+            "measurement" => InlinePayload.Telemetry(extraMeasurementMember: "\"temperature\": 4.5"),
+            "device" => InlinePayload.Telemetry(device: """{ "firmware": "1.4.2", "uptime": 86400 }"""),
+            "battery" => InlinePayload.Telemetry(device: """{ "firmware": "1.4.2", "battery": { "value": 3.61, "unit": "V", "temperature": 21 } }"""),
+            "signal" => InlinePayload.Telemetry(device: """{ "firmware": "1.4.2", "signal": { "rsrp": -104, "sinr": 7 } }"""),
+            _ => throw new ArgumentOutOfRangeException(nameof(level))
+        };
+
+        var result = TelemetryValidator.Validate(payload);
+
+        Assert.True(result.IsValid, $"an unknown field in {level} was rejected: {result.Error}");
+    }
+
+    /// <summary>The known battery fields still arrive when an unknown one sits beside them.</summary>
+    [Fact]
+    public void Validate_UnknownBatteryField_KeepsTheKnownOnes()
+    {
+        var result = TelemetryValidator.Validate(InlinePayload.Telemetry(
+            device: """{ "firmware": "1.4.2", "battery": { "value": 3.61, "unit": "V", "chemistry": "Li-SOCl2" } }"""));
+
+        var battery = result.Message?.Device.Battery;
+        Assert.NotNull(battery);
+        Assert.Equal(3.61, battery!.Value);
+        Assert.Equal("V", battery.Unit);
+    }
+
+    /// <summary>
     /// Contract section 6: an unrecognised version is rejected explicitly, never read as v1.
     /// A v2 message is a breaking change by definition, so guessing at it would corrupt data.
     /// </summary>

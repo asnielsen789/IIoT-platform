@@ -92,7 +92,7 @@
         "battery": {
           "type": "object",
           "required": ["value", "unit"],
-          "additionalProperties": false,
+          "additionalProperties": true,
           "description": "Battery status. Operationally necessary for a large battery-powered fleet.",
           "properties": {
             "value": { "type": "number", "minimum": 0, "maximum": 10 },
