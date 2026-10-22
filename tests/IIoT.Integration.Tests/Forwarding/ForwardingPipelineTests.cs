@@ -116,6 +116,36 @@ public class ForwardingPipelineTests : IAsyncLifetime
     }
 
     /// <summary>
+    /// A message at the corners of the device schema — a uint32 sequence number past 2³¹, lower-case
+    /// RFC 3339 letters, a leap second — is delivered, and the gateway accepts what the platform made
+    /// of the leap second. Written inline: it is not a contract example.
+    /// </summary>
+    [Fact]
+    public async Task SchemaValidEdgeCases_ArriveAtTheGateway()
+    {
+        const string payload = """
+            {
+              "schemaVersion": 1,
+              "messageId": "01J8F2K9QS4T7V0X3Z6B8N1M5G",
+              "sentAt": "2017-01-01t00:00:05z",
+              "sequence": 4294967295,
+              "measurements": [
+                { "type": "level", "value": 1449.9, "unit": "mm", "measuredAt": "2016-12-31T23:59:60Z" }
+              ],
+              "device": { "firmware": "1.4.2", "battery": { "value": 3.6, "unit": "V", "temperature": 21 } }
+            }
+            """;
+
+        var outcome = await _pipeline.ProcessAsync(payload, AuthenticatedDevice, EnqueuedAt);
+
+        Assert.Equal(ProcessingOutcome.Forwarded, outcome);
+        var reading = Assert.Single(Assert.Single(_gateway.Store.Batches).Body.GetProperty("readings").EnumerateArray());
+        Assert.Equal(
+            new DateTimeOffset(2016, 12, 31, 23, 59, 59, TimeSpan.Zero).AddTicks(TimeSpan.TicksPerSecond - 1),
+            reading.GetProperty("at").GetDateTimeOffset());
+    }
+
+    /// <summary>
     /// Event Hubs delivers at least once, so the same event can be processed twice. The second
     /// delivery reaches the gateway, is accepted with the same status, and nothing is stored twice.
     /// </summary>

@@ -27,7 +27,13 @@ public sealed record TelemetryMessage
     public required DateTimeOffset SentAt { get; init; }
 
     /// <summary>Monotonically increasing per device. Gaps indicate lost messages.</summary>
-    public int? Sequence { get; init; }
+    /// <remarks>
+    /// A <see cref="long"/>, because the schema sets no maximum and firmware counters are
+    /// typically unsigned 32-bit: an <see cref="int"/> would refuse every value from 2³¹ up, which
+    /// is half of such a counter's range. <see cref="long"/> holds every unsigned 32-bit value and
+    /// any 64-bit counter below 2⁶³. A larger value is rejected with that reason, never wrapped.
+    /// </remarks>
+    public long? Sequence { get; init; }
 
     /// <summary>
     /// One or more measurements. Several entries mean the device is transmitting readings it
