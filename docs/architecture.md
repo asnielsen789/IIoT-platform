@@ -42,7 +42,7 @@ graph TB
     subgraph azure ["Azure Tenant"]
         iothub["Azure IoT Hub<br/>---<br/>Device management,<br/>MQTT broker,<br/>message routing"]
 
-        keyvault["Azure Key Vault<br/>---<br/>X.509 certificates (CA),<br/>secrets, connection strings"]
+        keyvault["Azure Key Vault<br/>---<br/>Device CA keys and certificates,<br/>secrets, connection strings"]
 
         function["Azure Function<br/>(.NET 10 / C#)<br/>---<br/>Message processing,<br/>transformation,<br/>downstream routing"]
 
@@ -54,7 +54,7 @@ graph TB
     end
 
     iothub -- "Event trigger" --> function
-    keyvault -- "certificates" --> iothub
+    keyvault -. "issuing CA certificate<br/>(registered once by an operator)" .-> iothub
     keyvault -- "secrets" --> function
     function --> apim
     function -- "telemetry" --> monitor
@@ -74,7 +74,7 @@ graph TB
 | Component | Responsibility | Modularity |
 |-----------|----------------|------------|
 | **IoT Hub** | Device registry, MQTT broker, message routing, C2D messages | Replaceable by another MQTT broker — no vendor lock-in in the application layer |
-| **Key Vault** | CA for X.509 device certificates, secrets for the Function | Standard certificate handling, can be migrated |
+| **Key Vault** | The device CA's signing keys, which never leave it, and its certificates ([ADR-009](adr/adr-009-device-pki.md)); secrets for the Function. Not a CA itself: `tools/IIoT.DeviceCa` builds the certificates and has Key Vault sign them | Plain keys and RFC 5280 certificates: the keys can move to an HSM, the issuing CA to another provider |
 | **Azure Function** | Core logic: receive → transform → forward. Adapter pattern downstream | Can be relocated to other infrastructure as a container or service |
 | **APIM** | Optional layer for throttling, versioning and logging of outbound calls | Can be removed without affecting the Function |
 | **Application Insights** | Observability for the whole platform | Replaceable by another monitoring solution |
@@ -89,15 +89,14 @@ Normal flow for a level reading from sensor to the downstream system.
 sequenceDiagram
     participant S as NB-IoT Sensor
     participant IH as Azure IoT Hub
-    participant KV as Key Vault
     participant AF as Azure Function
     participant A0 as Auth0
     participant GW as Downstream Gateway
 
     Note over S,IH: Device authentication (on connect)
-    S->>IH: TLS handshake with X.509 cert
-    IH->>KV: Validate device certificate
-    KV-->>IH: Certificate valid
+    S->>IH: TLS handshake with X.509 device certificate
+    IH->>IH: Verify chain to the registered issuing CA, CN = device ID
+    IH-->>S: Handshake complete, CONNECT accepted
 
     Note over S,GW: Data transmission (every 4 hours)
     S->>IH: MQTT PUBLISH (level reading)
