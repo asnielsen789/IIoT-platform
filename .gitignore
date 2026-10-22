@@ -64,3 +64,8 @@ nunit-*.xml
 # any other base64 string, so secret scanning and push protection will not catch it.
 # The README points at a path outside the repo; this is the guard if one lands inside.
 *devices*.json
+
+# A device's X.509 private key, as the test client's create-csr names it (<id>.key.pem).
+# The default location is ~/.secrets/iiot, outside the repo; this is the guard if one is
+# written inside. Certificates, chains and CSRs (.cert.pem, .chain.pem, .csr.pem) are public.
+*.key.pem

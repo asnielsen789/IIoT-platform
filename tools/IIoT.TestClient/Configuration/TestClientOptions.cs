@@ -18,6 +18,18 @@ public sealed record TestClientOptions
     /// <summary>Path to a runtime-supplied fleet file, or <see langword="null"/>.</summary>
     public string? DevicesFile { get; init; }
 
+    /// <summary>
+    /// The device certificate (PEM, device certificate first) for X.509 authentication, or
+    /// <see langword="null"/> for a shared access key.
+    /// </summary>
+    public string? CertificateFile { get; init; }
+
+    /// <summary>The private key for <see cref="CertificateFile"/>, PEM, or <see langword="null"/>.</summary>
+    public string? KeyFile { get; init; }
+
+    /// <summary>True when the device authenticates with a certificate rather than a key.</summary>
+    public bool UsesCertificate => CertificateFile is not null || KeyFile is not null;
+
     /// <summary>How many devices to simulate concurrently.</summary>
     public int DeviceCount { get; init; } = 1;
 
@@ -48,13 +60,17 @@ public sealed record TestClientOptions
     /// <exception cref="CommandLineException">The combination cannot be run.</exception>
     public void Validate()
     {
-        if (DevicesFile is null)
+        if (UsesCertificate)
+        {
+            ValidateCertificate();
+        }
+        else if (DevicesFile is null)
         {
             if (string.IsNullOrWhiteSpace(DeviceId) || string.IsNullOrWhiteSpace(DeviceKey))
             {
                 throw new CommandLineException(
                     "Supply either --device-id and --device-key (or DEVICE_ID and DEVICE_KEY), " +
-                    "or --devices <path>.");
+                    "--device-id with --cert and --key, or --devices <path>.");
             }
 
             if (DeviceCount > 1)
@@ -76,5 +92,35 @@ public sealed record TestClientOptions
 
         if (SasLifetime <= TimeSpan.Zero)
             throw new CommandLineException("--sas-lifetime must be positive.");
+    }
+
+    private void ValidateCertificate()
+    {
+        if (CertificateFile is null || KeyFile is null)
+        {
+            throw new CommandLineException(
+                "--cert and --key go together: the device certificate and the private key it was issued for.");
+        }
+
+        if (DeviceKey is not null)
+        {
+            throw new CommandLineException(
+                "--device-key and --cert are two ways to authenticate the same device; use one.");
+        }
+
+        // Certificates in multi-device mode would need a certificate and a key per device in the
+        // devices file, a format of their own. One client per certificate covers the tests #11 needs.
+        if (DevicesFile is not null || DeviceCount > 1)
+        {
+            throw new CommandLineException(
+                "Certificate authentication covers one device: --cert cannot be combined with --devices or " +
+                "a --device-count above 1. Run one client per certificate.");
+        }
+
+        if (string.IsNullOrWhiteSpace(DeviceId))
+        {
+            throw new CommandLineException(
+                "--cert needs --device-id (or DEVICE_ID): the device the certificate was issued for.");
+        }
     }
 }
