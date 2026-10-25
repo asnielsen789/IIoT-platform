@@ -15,7 +15,7 @@
       Azure.Core to 1.61.0. Without this, restore resolves 1.49.0. Raising it is a change of its own:
       1.62.0 and 1.63.0 list breaking changes in the credential types.
     -->
-    <PackageReference Include="Azure.Core" Version="1.61.0" />
+    <PackageReference Include="Azure.Core" Version="1.63.0" />
     <!--
       Referenced directly to lift it above the 5.11.5 that the Event Hubs worker extension pulls
       in. On 5.11.5, EventData.EnqueuedTime casts the enqueued-time annotation to DateTimeOffset,
