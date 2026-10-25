@@ -16,6 +16,11 @@ param iotHubSkuName = 'F1'
 // Consumption quota of a free trial subscription.
 param functionAppMaximumInstanceCount = 10
 
+// Caps cost. 50 MB a day is about fifteen times staging's busiest day so far (3.2 MB, during the
+// first deployment's crash loop), so only a surge reaches it. At most about 1.5 GB a month: a
+// small part of the 100 DKK monthly budget (#1) even if all of it were billed.
+param logAnalyticsDailyQuotaGb = '0.05'
+
 // The repository whose deploy workflow may deploy the Function's code (#5). It was created after
 // 15 July 2026, so GitHub issues it OIDC subjects in the immutable form, with the owner's and the
 // repository's numeric IDs after the names: a deleted and re-created, or renamed and re-used,

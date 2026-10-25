@@ -12,6 +12,9 @@ param logAnalyticsName string
 @description('Name of the Application Insights resource.')
 param applicationInsightsName string
 
+@description('Daily ingestion cap of the workspace, in GB, as a decimal string (Bicep has no floating-point type). \'-1\' removes the cap.')
+param dailyQuotaGb string
+
 @description('Azure region.')
 param location string
 
@@ -28,6 +31,14 @@ resource logAnalytics 'Microsoft.OperationalInsights/workspaces@2026-03-01' = {
     }
     // The minimum for PerGB2018, and covered by the ingestion price.
     retentionInDays: 30
+    // A backstop against a surge, not a filter. Once a day's billable ingestion reaches the cap,
+    // collection stops until the workspace's daily reset, at an hour Azure picks; some excess is
+    // still ingested and billed. Application Insights writes into this workspace, and for a
+    // workspace-based component the effective cap is the lower of this one and its own, so this
+    // one governs. https://learn.microsoft.com/azure/azure-monitor/logs/daily-cap
+    workspaceCapping: {
+      dailyQuotaGb: json(dailyQuotaGb)
+    }
   }
 }
 
