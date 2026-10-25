@@ -1,11 +1,11 @@
 using IIoT.Functions;
-using Microsoft.Azure.Functions.Worker;
 using Microsoft.Azure.Functions.Worker.Builder;
 using Microsoft.Extensions.Hosting;
 
+// CreateBuilder applies the worker defaults itself — converters, Functions logging, the gRPC
+// channel to the host. ConfigureFunctionsWebApplication() would add ASP.NET Core integration for
+// HTTP triggers on top; the only function here is the IoT Hub trigger, so it is not called.
 var builder = FunctionsApplication.CreateBuilder(args);
-
-builder.ConfigureFunctionsWebApplication();
 
 // Application Insights, including the logging filter the platform needs. Kept in an extension
 // method so a test runs exactly this wiring; see ObservabilityServiceCollectionExtensions.

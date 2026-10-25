@@ -9,9 +9,17 @@ namespace IIoT.Core.Validation;
 /// Validates a raw telemetry payload against the v1 contract and, if it passes, deserialises it.
 /// </summary>
 /// <remarks>
+/// <para>
 /// Validation comes first and deserialisation second, deliberately: the schema is the contract,
 /// so a payload is judged against the published document rather than against whatever the C#
 /// models happen to accept.
+/// </para>
+/// <para>
+/// Every payload ends in exactly one of two results, and never in an exception: valid and
+/// deserialised, or rejected with a reason that names the field. A schema-valid payload is
+/// deserialised by <see cref="TelemetryJson.Options"/>, which reads everything the schema accepts
+/// or refuses a value it cannot hold with the reason why.
+/// </para>
 /// </remarks>
 public static class TelemetryValidator
 {
@@ -32,6 +40,14 @@ public static class TelemetryValidator
         IncludeApplicatorErrors = false
     };
 
+    /// <summary>
+    /// A repeated member name is refused at parse time. JSON Schema leaves its meaning undefined
+    /// (2020-12 core, section 4.2.1), and in practice the evaluator checked the first value while
+    /// the deserialiser kept the last: <c>"value": 1432.5, "value": -50000</c> passed
+    /// <c>"minimum": 0</c> and was forwarded as -50000.
+    /// </summary>
+    private static readonly JsonDocumentOptions DocumentOptions = new() { AllowDuplicateProperties = false };
+
     /// <summary>Validates <paramref name="payload"/> and deserialises it on success.</summary>
     public static TelemetryValidationResult Validate(string payload)
     {
@@ -41,11 +57,18 @@ public static class TelemetryValidator
         JsonDocument document;
         try
         {
-            document = JsonDocument.Parse(payload);
+            document = JsonDocument.Parse(payload, DocumentOptions);
         }
         catch (JsonException ex)
         {
             return TelemetryValidationResult.Invalid($"Payload is not valid JSON: {ex.Message}");
+        }
+        catch (ArgumentException ex)
+        {
+            // A string holding an unpaired surrogate cannot be turned into UTF-8 to be parsed. A
+            // body decoded from the wire never holds one, since invalid UTF-8 decodes to U+FFFD,
+            // but this method takes any string.
+            return TelemetryValidationResult.Invalid($"Payload is not valid text: {ex.Message}");
         }
 
         using (document)
@@ -56,7 +79,23 @@ public static class TelemetryValidator
             if (versionError is not null)
                 return TelemetryValidationResult.Invalid(versionError);
 
-            var evaluation = TelemetrySchema.Instance.Evaluate(root, Options);
+            // Resolved outside the try below: a schema that fails to load is a broken build, and
+            // must not be reported as a bad message from every device.
+            var schema = TelemetrySchema.Instance;
+
+            EvaluationResults evaluation;
+            try
+            {
+                evaluation = schema.Evaluate(root, Options);
+            }
+            catch (InvalidOperationException ex)
+            {
+                // A string holding an escaped lone surrogate, such as "\uD800", is well-formed JSON
+                // (RFC 8259 section 8.2) but no string at all to .NET, so the evaluator throws when
+                // it reads it to check a length or an enum. There is nothing to validate it against.
+                return TelemetryValidationResult.Invalid($"Payload could not be evaluated against the v1 schema: {ex.Message}");
+            }
+
             if (!evaluation.IsValid)
                 return TelemetryValidationResult.Invalid(Describe(evaluation));
 
@@ -64,6 +103,12 @@ public static class TelemetryValidator
             try
             {
                 message = root.Deserialize<TelemetryMessage>(TelemetryJson.Options);
+            }
+            catch (RejectedValueException ex)
+            {
+                // Valid against the schema, but a value the platform cannot hold — see TelemetryJson.
+                // Reported like a schema error: the field, then the reason.
+                return TelemetryValidationResult.Invalid($"{ToJsonPointer(ex.Path)}: {ex.Message}");
             }
             catch (JsonException ex)
             {
@@ -84,6 +129,10 @@ public static class TelemetryValidator
     /// reason rather than a generic <c>const</c> violation. Section 6 of the contract requires
     /// an unknown <c>schemaVersion</c> to be rejected explicitly and never interpreted as v1.
     /// </summary>
+    /// <remarks>
+    /// Compared by value, as the schema's <c>const</c> compares it: <c>1.0</c> is the number 1, and
+    /// rejecting it here as an unknown version would refuse a message the schema accepts.
+    /// </remarks>
     private static string? CheckSchemaVersion(JsonElement root)
     {
         if (root.ValueKind != JsonValueKind.Object ||
@@ -94,7 +143,7 @@ public static class TelemetryValidator
         }
 
         if (versionElement.ValueKind == JsonValueKind.Number &&
-            versionElement.TryGetInt32(out var version) &&
+            versionElement.TryGetDecimal(out var version) &&
             version == TelemetrySchema.SupportedVersion)
         {
             return null;
@@ -124,6 +173,16 @@ public static class TelemetryValidator
             ? $"{reported}; and {errors.Count - MaxReportedErrors} more"
             : reported;
     }
+
+    /// <summary>
+    /// The serializer names a field <c>$.measurements[0].measuredAt</c>; the schema errors name it
+    /// <c>/measurements/0/measuredAt</c>. One style in the log. Only the models' own property names
+    /// reach this — plain camelCase, which never needs the bracket-quoted form or pointer escaping.
+    /// </summary>
+    private static string ToJsonPointer(string? path) =>
+        string.IsNullOrEmpty(path)
+            ? ""
+            : path.TrimStart('$').Replace('[', '.').Replace("]", "", StringComparison.Ordinal).Replace('.', '/');
 
     /// <summary>
     /// Walks the result tree. <c>OutputFormat.List</c> flattens most of it, but a nested detail

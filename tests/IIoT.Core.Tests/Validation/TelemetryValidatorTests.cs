@@ -123,6 +123,105 @@ public class TelemetryValidatorTests
     }
 
     /// <summary>
+    /// Consumer obligation 1 holds at every level of the message, not only where the fixture puts
+    /// its unknown fields. <c>device.battery</c> was the one object whose schema said otherwise, so
+    /// a firmware that added a field there would have had every one of its messages rejected.
+    /// </summary>
+    [Theory]
+    [InlineData("root")]
+    [InlineData("measurement")]
+    [InlineData("device")]
+    [InlineData("battery")]
+    [InlineData("signal")]
+    public void Validate_UnknownField_IsIgnoredAtEveryLevel(string level)
+    {
+        var payload = level switch
+        {
+            "root" => InlinePayload.Telemetry(extraRootMember: "\"bearer\": \"nb-iot\""),
+            "measurement" => InlinePayload.Telemetry(extraMeasurementMember: "\"temperature\": 4.5"),
+            "device" => InlinePayload.Telemetry(device: """{ "firmware": "1.4.2", "uptime": 86400 }"""),
+            "battery" => InlinePayload.Telemetry(device: """{ "firmware": "1.4.2", "battery": { "value": 3.61, "unit": "V", "temperature": 21 } }"""),
+            "signal" => InlinePayload.Telemetry(device: """{ "firmware": "1.4.2", "signal": { "rsrp": -104, "sinr": 7 } }"""),
+            _ => throw new ArgumentOutOfRangeException(nameof(level))
+        };
+
+        var result = TelemetryValidator.Validate(payload);
+
+        Assert.True(result.IsValid, $"an unknown field in {level} was rejected: {result.Error}");
+    }
+
+    /// <summary>The known battery fields still arrive when an unknown one sits beside them.</summary>
+    [Fact]
+    public void Validate_UnknownBatteryField_KeepsTheKnownOnes()
+    {
+        var result = TelemetryValidator.Validate(InlinePayload.Telemetry(
+            device: """{ "firmware": "1.4.2", "battery": { "value": 3.61, "unit": "V", "chemistry": "Li-SOCl2" } }"""));
+
+        var battery = result.Message?.Device.Battery;
+        Assert.NotNull(battery);
+        Assert.Equal(3.61, battery!.Value);
+        Assert.Equal("V", battery.Unit);
+    }
+
+    /// <summary>
+    /// A repeated member gives the schema and the model two values to choose from, and they chose
+    /// differently: the evaluator checked the first, the deserialiser kept the second. Each of these
+    /// passed the schema and was then processed with the value the schema never saw.
+    /// </summary>
+    [Theory]
+    [InlineData("value", "\"value\": 1432.5, \"value\": -50000")]
+    [InlineData("messageId", "\"messageId\": \"01J8F2K9QS4T7V0X3Z6B8N1M5E\", \"messageId\": \"a-message-id-far-longer-than-the-64-characters-the-schema-allows-for-one\"")]
+    [InlineData("firmware", "\"firmware\": \"1.4.2\", \"firmware\": \"\"")]
+    public void Validate_RepeatedMember_IsRejected(string name, string members)
+    {
+        var payload = name switch
+        {
+            "value" => InlinePayload.Telemetry().Replace("\"value\": 1432.5", members, StringComparison.Ordinal),
+            "messageId" => InlinePayload.Telemetry().Replace("\"messageId\": \"01J8F2K9QS4T7V0X3Z6B8N1M5E\"", members, StringComparison.Ordinal),
+            _ => InlinePayload.Telemetry(device: $"{{ {members} }}")
+        };
+
+        var result = TelemetryValidator.Validate(payload);
+
+        Assert.False(result.IsValid, $"a repeated '{name}' was accepted");
+        Assert.Contains($"Duplicate property '{name}'", result.Error!, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Refused in an unknown field too. Ignoring unknown fields means ignoring their values, not
+    /// accepting a document whose meaning JSON Schema leaves undefined.
+    /// </summary>
+    [Fact]
+    public void Validate_RepeatedUnknownMember_IsRejected()
+    {
+        var result = TelemetryValidator.Validate(InlinePayload.Telemetry(extraRootMember: "\"note\": 1, \"note\": 2"));
+
+        Assert.False(result.IsValid);
+        Assert.Contains("Duplicate property 'note'", result.Error!, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The schema is case-sensitive, so <c>Value</c> is an unknown field to it and goes unchecked.
+    /// The model used to bind it without regard to case, over the <c>value</c> the schema had just
+    /// approved. Now it is ignored like any other unknown field, and the validated value stands.
+    /// </summary>
+    [Fact]
+    public void Validate_MemberDifferingOnlyInCase_IsAnUnknownFieldAndChangesNothing()
+    {
+        var payload = InlinePayload.Telemetry(
+            extraMeasurementMember: "\"Value\": -50000",
+            extraRootMember: "\"MessageId\": \"x\", \"DEVICEID\": \"tank-000999\"");
+
+        var result = TelemetryValidator.Validate(payload);
+
+        Assert.True(result.IsValid, result.Error);
+        var message = result.Message!;
+        Assert.Equal(1432.5, Assert.Single(message.Measurements).Value);
+        Assert.Equal("01J8F2K9QS4T7V0X3Z6B8N1M5E", message.MessageId);
+        Assert.Null(message.DeviceId);
+    }
+
+    /// <summary>
     /// Contract section 6: an unrecognised version is rejected explicitly, never read as v1.
     /// A v2 message is a breaking change by definition, so guessing at it would corrupt data.
     /// </summary>

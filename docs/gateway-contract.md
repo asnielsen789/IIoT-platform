@@ -112,20 +112,22 @@ Error bodies are [RFC 9457](https://www.rfc-editor.org/rfc/rfc9457) problem deta
 |--------|---------|
 | `202 Accepted` | Stored — or a replay of a batch already stored, which is acknowledged the same way (section 5). |
 | `400 Bad Request` | The body does not satisfy the schema, the JSON is malformed, or the `Idempotency-Key` header is missing or does not equal `messageId`. |
-| `401 Unauthorized` | The token is missing or invalid. Checked before anything else, so an unauthenticated caller learns nothing about the contract. |
+| `401 Unauthorized` | The token is missing or invalid. Checked before anything else, so an unauthenticated caller learns nothing about the contract. The sender retries once, with a newly obtained token (section 6). |
 | `415 Unsupported Media Type` | The body is not `application/json`. |
 | `408`, `429`, `5xx` | Transient. The sender retries with backoff. |
 
 Any other `4xx` is permanent: the same request will fail the same way, so the sender does not
-retry it. Only `408`, `429` and `5xx` are retried.
+retry it. `408`, `429` and `5xx` are retried with backoff. `401` is the one exception among the
+`4xx`: it refuses the token rather than the request, so the sender retries it once, with a new
+token. `403` is not retried — the token was accepted, and the caller is not allowed.
 
 ---
 
 ## 5. Idempotency
 
 Delivery is **at least once**. The platform reads an event stream that redelivers from its last
-checkpoint after a restart, it retries a request whose response it never saw, and a device may
-resend a message itself. A receiver will therefore see the same batch more than once, and must
+checkpoint after a restart, it retries a request whose response it never saw, it sends a request
+refused with `401` once more with a new token, and a device may resend a message itself. A receiver will therefore see the same batch more than once, and must
 treat that as normal.
 
 - The `Idempotency-Key` is the batch's `messageId`, and must equal it — otherwise `400`. If they
@@ -162,6 +164,13 @@ A receiver validates, on **every** request:
 | Lifetime | `exp` is required and must not have passed; `nbf`, when present, must have. |
 
 There are no sessions and no anonymous endpoints.
+
+**Signing-key rotation.** When the provider rotates its signing key, a sender may still hold a
+token signed with the old key that has not yet expired. A receiver that no longer trusts that key
+answers `401`. The sender then discards the token, obtains a new one and sends the same request
+again — same body, same `Idempotency-Key` — once. A `401` to the new token as well means the
+receiver does not trust what the provider issues for this client, and the sender gives up on that
+request rather than asking for token after token.
 
 ---
 
@@ -224,8 +233,8 @@ by `AddTelemetryForwarding` in `src/IIoT.Functions/`.
 | Batching | One request per device message, every reading included (ADR-004). |
 | Identity and time | `deviceId` and `receivedAt` come from what the platform authenticated and when IoT Hub enqueued the message — never from the payload. |
 | Transport | HTTPS only; a plain-HTTP gateway address is refused before a token is even requested. Loopback is the only exception. |
-| Retries | `408`, `429`, `5xx`, network errors and timeouts are retried with exponential backoff and jitter, honouring `Retry-After`: the standard pipeline from `Microsoft.Extensions.Http.Resilience` — three retries, 10 seconds per attempt, 30 seconds in total by default. Any other `4xx` is never retried. |
-| Token | Obtained with the client credentials grant, cached, and renewed five minutes before expiry (at most half its lifetime). Concurrent messages share one refresh. On a `401` the cached token is discarded, so the next message gets a new one. |
+| Retries | `408`, `429`, `5xx`, network errors and timeouts are retried with exponential backoff and jitter, honouring `Retry-After`: the standard pipeline from `Microsoft.Extensions.Http.Resilience` — three retries, 10 seconds per attempt, 30 seconds in total by default. Any other `4xx` is never retried by that pipeline; `401` is retried once by the forwarder itself (see Token). |
+| Token | Obtained with the client credentials grant, cached, and renewed five minutes before expiry (at most half its lifetime). Concurrent messages share one refresh. On a `401` the cached token is discarded and the same request — same body, same `Idempotency-Key` — is sent once more with a newly obtained token, so a signing-key rotation at the provider costs no message. That retry is a second pass through the resilience pipeline, with its own retries and its own 30-second budget, and there is never a third. A second `401` is logged at error level as an authentication failure, distinct from transport failures, and the message fails; the new token is kept, since another would fare no better. A `403` is not retried. |
 | Failure | The message ends as `ProcessingOutcome.ForwardingFailed`, logged at error level with the message id, the device and the reason. |
 
 > **A message that fails to forward is currently lost.** Nothing downstream has it and the

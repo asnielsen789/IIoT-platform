@@ -5,23 +5,29 @@ using IIoT.Core.Forwarders;
 using IIoT.Core.Models;
 using IIoT.Core.Tests.Fixtures;
 using IIoT.Core.Tests.Http;
+using IIoT.Core.Tests.Logging;
 using IIoT.Core.Validation;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 
 namespace IIoT.Core.Tests.Forwarders;
 
 /// <summary>
-/// The forwarder's own HTTP behaviour, against a stub handler. Retries are not tested here: they
-/// belong to the resilience handler the client is registered with, and are covered end to end in
-/// IIoT.Integration.Tests.
+/// The forwarder's own HTTP behaviour, against a stub handler. Transient retries are not tested
+/// here: they belong to the resilience handler the client is registered with, and are covered end
+/// to end in IIoT.Integration.Tests. The one retry the forwarder makes itself, on a 401, is.
 /// </summary>
 public class GatewayV1ForwarderTests
 {
     private const string AccessToken = "access-token-for-tests";
+
+    /// <summary>What the provider hands out once <see cref="AccessToken"/> has been invalidated.</summary>
+    private const string NewAccessToken = "new-access-token-for-tests";
+
     private static readonly ForwardingContext Context = new("tank-000123", new DateTimeOffset(2026, 9, 14, 6, 0, 13, TimeSpan.Zero));
 
-    private readonly RecordingTokenProvider _tokens = new(AccessToken);
+    private readonly RecordingTokenProvider _tokens = new(AccessToken, NewAccessToken);
 
     [Fact]
     public async Task Forward_PostsTheBatchWithBearerTokenAndIdempotencyKey()
@@ -125,19 +131,117 @@ public class GatewayV1ForwarderTests
     }
 
     /// <summary>
-    /// A 401 means the gateway no longer accepts a token the cache still thinks is valid. It is
-    /// not retried, but the token is discarded so the next message gets a new one.
+    /// A 401 means the gateway no longer accepts a token the cache still thinks is valid — the
+    /// identity provider has rotated its signing keys, say. The token is discarded and the same
+    /// request sent once more with a new one: same address, same body, same Idempotency-Key, so a
+    /// gateway that did store the first attempt deduplicates the second.
     /// </summary>
     [Fact]
-    public async Task Forward_Unauthorized_InvalidatesTheToken()
+    public async Task Forward_Unauthorized_RetriesOnceWithANewToken_AndTheSameRequest()
+    {
+        var handler = new StubHttpMessageHandler(request => new HttpResponseMessage(
+            request.Authorization?.Parameter == AccessToken ? HttpStatusCode.Unauthorized : HttpStatusCode.Accepted));
+
+        await Create(handler, "https://gateway.iiot.test/").ForwardAsync(Parse("valid-full.json"), Context);
+
+        Assert.Equal(new[] { AccessToken, NewAccessToken }, handler.Requests.Select(request => request.Authorization!.Parameter));
+        Assert.Equal(new[] { AccessToken }, _tokens.Invalidated);
+
+        var (first, retry) = (handler.Requests[0], handler.Requests[1]);
+        Assert.Equal(first.Uri, retry.Uri);
+        Assert.Equal(first.Body, retry.Body);
+        Assert.Equal("01J8F2K9QS4T7V0X3Z6B8N1M5B", retry.Headers["Idempotency-Key"]);
+        Assert.Equal(first.Headers["Idempotency-Key"], retry.Headers["Idempotency-Key"]);
+        Assert.Equal("application/json", retry.ContentType);
+    }
+
+    /// <summary>
+    /// A token issued moments ago refused as well means the token is not the problem: the gateway
+    /// does not trust what the provider issues. That is an authentication failure, reported as
+    /// one, and the forwarder stops after the one retry instead of asking for token after token.
+    /// </summary>
+    [Fact]
+    public async Task Forward_UnauthorizedTwice_IsAnAuthenticationFailure_AndStops()
     {
         var handler = Respond(HttpStatusCode.Unauthorized);
+        var logger = new CapturingLogger<GatewayV1Forwarder>();
+
+        var exception = await Assert.ThrowsAsync<ForwardingException>(() =>
+            Create(handler, "https://gateway.iiot.test/", logger).ForwardAsync(Parse("valid-minimal.json"), Context));
+
+        Assert.Equal(HttpStatusCode.Unauthorized, exception.StatusCode);
+        Assert.StartsWith("Gateway v1 authentication failed: it responded 401 Unauthorized to a newly obtained token", exception.Message, StringComparison.Ordinal);
+        Assert.Equal(2, handler.Requests.Count);
+        Assert.Equal(2, _tokens.Requests);
+
+        // The new token is kept: another would fare no better, and the next message trying it
+        // first costs a gateway request rather than a call to the rate-limited token endpoint.
+        Assert.Equal(new[] { AccessToken }, _tokens.Invalidated);
+
+        var error = Assert.Single(logger.Entries, entry => entry.Level == LogLevel.Error);
+        Assert.StartsWith("Authentication failure: gateway v1 rejected a newly obtained access token", error.Message, StringComparison.Ordinal);
+        Assert.Equal("01J8F2K9QS4T7V0X3Z6B8N1M5A", error.Properties["MessageId"]);
+        Assert.Equal("tank-000123", error.Properties["DeviceId"]);
+
+        Assert.All(logger.Entries, entry =>
+        {
+            Assert.DoesNotContain(AccessToken, entry.Everything, StringComparison.Ordinal);
+            Assert.DoesNotContain(NewAccessToken, entry.Everything, StringComparison.Ordinal);
+        });
+    }
+
+    /// <summary>
+    /// After the retry, any other answer is handled as it always is — here a refusal, reported with
+    /// the gateway's reason. The retry's answer is the one that counts.
+    /// </summary>
+    [Fact]
+    public async Task Forward_UnauthorizedThenRefused_ReportsTheRetrysAnswer()
+    {
+        var handler = new StubHttpMessageHandler(request => request.Authorization?.Parameter == AccessToken
+            ? new HttpResponseMessage(HttpStatusCode.Unauthorized)
+            : StubHttpMessageHandler.Json(HttpStatusCode.BadRequest, """{ "status": 400, "detail": "/readings/0/quality: missing" }"""));
 
         var exception = await Assert.ThrowsAsync<ForwardingException>(() =>
             Create(handler, "https://gateway.iiot.test/").ForwardAsync(Parse("valid-minimal.json"), Context));
 
-        Assert.Equal(HttpStatusCode.Unauthorized, exception.StatusCode);
+        Assert.Equal(HttpStatusCode.BadRequest, exception.StatusCode);
+        Assert.Equal("Gateway v1 responded 400 BadRequest: /readings/0/quality: missing", exception.Message);
+        Assert.Equal(2, handler.Requests.Count);
+    }
+
+    /// <summary>When no new token can be had, nothing is sent a second time.</summary>
+    [Fact]
+    public async Task Forward_UnauthorizedAndNoNewToken_FailsWithTheTokenProvidersReason()
+    {
+        var handler = new StubHttpMessageHandler(_ =>
+        {
+            _tokens.FailWith = new AccessTokenException("Token endpoint responded 503 ServiceUnavailable");
+            return new HttpResponseMessage(HttpStatusCode.Unauthorized);
+        });
+
+        await Assert.ThrowsAsync<AccessTokenException>(() =>
+            Create(handler, "https://gateway.iiot.test/").ForwardAsync(Parse("valid-minimal.json"), Context));
+
+        Assert.Single(handler.Requests);
         Assert.Equal(new[] { AccessToken }, _tokens.Invalidated);
+    }
+
+    /// <summary>
+    /// A 403 is not retried: the gateway accepted the token and refused the caller, and a new token
+    /// for the same client changes nothing. The token stays cached, since it was not rejected.
+    /// </summary>
+    [Fact]
+    public async Task Forward_Forbidden_IsNotRetried_AndKeepsTheToken()
+    {
+        var handler = Respond(HttpStatusCode.Forbidden);
+
+        var exception = await Assert.ThrowsAsync<ForwardingException>(() =>
+            Create(handler, "https://gateway.iiot.test/").ForwardAsync(Parse("valid-minimal.json"), Context));
+
+        Assert.Equal(HttpStatusCode.Forbidden, exception.StatusCode);
+        Assert.Single(handler.Requests);
+        Assert.Equal(1, _tokens.Requests);
+        Assert.Empty(_tokens.Invalidated);
     }
 
     public static TheoryData<string?, string> RefusedBaseAddresses => new()
@@ -206,12 +310,12 @@ public class GatewayV1ForwarderTests
         Assert.Equal(0, _tokens.Requests);
     }
 
-    private GatewayV1Forwarder Create(StubHttpMessageHandler handler, string? baseAddress) =>
+    private GatewayV1Forwarder Create(StubHttpMessageHandler handler, string? baseAddress, ILogger<GatewayV1Forwarder>? logger = null) =>
         new(
             new HttpClient(handler),
             _tokens,
             Options.Create(new GatewayV1Options { BaseAddress = baseAddress is null ? null : new Uri(baseAddress) }),
-            NullLogger<GatewayV1Forwarder>.Instance);
+            logger ?? NullLogger<GatewayV1Forwarder>.Instance);
 
     private static StubHttpMessageHandler Respond(HttpStatusCode status) =>
         new(_ => new HttpResponseMessage(status));

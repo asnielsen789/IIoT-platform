@@ -156,6 +156,52 @@ public class TelemetryServiceTests
         Assert.Equal(EnqueuedAt, forwarded.Context.EnqueuedAt);
     }
 
+    /// <summary>
+    /// A conforming device's message is processed even where it uses the corners of the schema: a
+    /// uint32 sequence number past 2³¹, lower-case RFC 3339 letters and a leap second. Each of these
+    /// used to end as RejectedInvalidPayload, so the message was dropped.
+    /// </summary>
+    [Fact]
+    public async Task ProcessAsync_SchemaValidEdgeCases_AreForwarded()
+    {
+        var payload = InlinePayload.Telemetry(
+            sequence: "4294967295",
+            sentAt: "2017-01-01t00:00:05z",
+            measuredAt: "2016-12-31T23:59:60Z");
+
+        var outcome = await _service.ProcessAsync(payload, AuthenticatedDevice, EnqueuedAt);
+
+        Assert.Equal(ProcessingOutcome.Forwarded, outcome);
+        var forwarded = Assert.Single(_forwarder.Forwarded).Message;
+        Assert.Equal(4294967295L, forwarded.Sequence);
+        Assert.Equal(new DateTimeOffset(2017, 1, 1, 0, 0, 5, TimeSpan.Zero), forwarded.SentAt);
+        Assert.Equal(new DateTimeOffset(2016, 12, 31, 23, 59, 59, TimeSpan.Zero).AddTicks(TimeSpan.TicksPerSecond - 1), Assert.Single(forwarded.Measurements).MeasuredAt);
+    }
+
+    /// <summary>
+    /// A value the schema accepts but the platform cannot hold is a rejection like any other: not
+    /// forwarded, not thrown, and logged with the field and the reason.
+    /// </summary>
+    [Fact]
+    public async Task ProcessAsync_UnrepresentableValue_IsRejectedWithTheReasonLogged()
+    {
+        var logger = new CapturingLogger<TelemetryService>();
+        var service = new TelemetryService(_forwarder, logger);
+
+        var outcome = await service.ProcessAsync(
+            InlinePayload.Telemetry(measuredAt: "2026-09-14T06:00:10+23:59"), AuthenticatedDevice, EnqueuedAt);
+
+        Assert.Equal(ProcessingOutcome.RejectedInvalidPayload, outcome);
+        Assert.Empty(_forwarder.Forwarded);
+
+        var warning = Assert.Single(logger.Entries, entry => entry.Level == LogLevel.Warning);
+        Assert.Equal(AuthenticatedDevice, warning.Properties["DeviceId"]);
+        Assert.StartsWith(
+            "/measurements/0/measuredAt: '2026-09-14T06:00:10+23:59' has a UTC offset beyond ±14:00",
+            (string)warning.Properties["Reason"]!,
+            StringComparison.Ordinal);
+    }
+
     [Fact]
     public async Task ProcessAsync_MalformedPayload_IsRejectedWithoutThrowing()
     {

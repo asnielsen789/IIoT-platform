@@ -97,6 +97,9 @@ public sealed class GatewayTraffic
     /// <summary>The status each attempt was answered with, in order.</summary>
     public ConcurrentQueue<HttpStatusCode> Responses { get; } = new();
 
+    /// <summary>The <c>Idempotency-Key</c> each attempt carried, in order.</summary>
+    public ConcurrentQueue<string?> IdempotencyKeys { get; } = new();
+
     internal int NextAttempt() => Interlocked.Increment(ref _attempts);
 }
 
@@ -112,6 +115,8 @@ internal sealed class GatewayTrafficHandler : DelegatingHandler
     protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
     {
         var attempt = _traffic.NextAttempt();
+        _traffic.IdempotencyKeys.Enqueue(
+            request.Headers.TryGetValues(GatewayRequests.IdempotencyKeyHeader, out var keys) ? keys.Single() : null);
 
         var response = _traffic.Fault(attempt) is { } fault
             ? new HttpResponseMessage(fault) { RequestMessage = request }
