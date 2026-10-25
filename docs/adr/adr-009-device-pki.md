@@ -119,3 +119,27 @@ from the signing tool to DPS.**
 - Cooper, D., et al. (2008). *Internet X.509 Public Key Infrastructure Certificate and
   Certificate Revocation List (CRL) Profile* (RFC 5280). IETF
 - Issues: [#11](https://github.com/asnielsen789/IIoT-platform/issues/11), [#15](https://github.com/asnielsen789/IIoT-platform/issues/15), [#16](https://github.com/asnielsen789/IIoT-platform/issues/16), [#21](https://github.com/asnielsen789/IIoT-platform/issues/21), [#22](https://github.com/asnielsen789/IIoT-platform/issues/22), [#48](https://github.com/asnielsen789/IIoT-platform/issues/48)
+
+## Update (2026-10-25): verified on staging
+
+The implementation ([#11](https://github.com/asnielsen789/IIoT-platform/issues/11)) was run
+against staging, following the operator procedure in `infra/README.md`. The decision stands,
+and the run settled three details:
+
+- **End to end as decided.** The CA keys were created in Key Vault. The tool built both CA
+  certificates with Key Vault signing, and the issuing CA was registered in IoT Hub as
+  verified. A device certificate was issued from a CSR made by the simulated device, which then
+  connected with authentication type `CA-Signed`. Its message took the route and was processed.
+  Disabling the device made the next connection fail with `NotAuthorized`.
+- **The device sends its certificate without the issuing CA.** MQTTnet, which the test client
+  uses as device firmware would use its MQTT stack, cannot send intermediate certificates. IoT
+  Hub accepted the device certificate alone, because the CA it has registered is that
+  certificate's direct issuer. This also makes the handshake smaller, which matters on NB-IoT.
+  A setup that registers the root instead, such as a DPS enrollment group for the root
+  ([#48](https://github.com/asnielsen789/IIoT-platform/issues/48)), would need the device to send
+  the chain.
+- **The registration survives redeployment.** The registered CA certificate is not declared in
+  the templates, and an incremental infrastructure deployment left it in place.
+
+The hardware risk is unchanged: this was a simulated device, not an NB-IoT modem
+([#22](https://github.com/asnielsen789/IIoT-platform/issues/22)).

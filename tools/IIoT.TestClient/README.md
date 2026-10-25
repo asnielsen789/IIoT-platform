@@ -194,8 +194,8 @@ reason given, so the client checks first and says what is wrong:
   to it, and every handshake over NB-IoT is one certificate smaller. Microsoft's walkthrough does
   the same: it registers the subordinate CA that signs the devices
   ([Create and upload certificates for testing](https://learn.microsoft.com/azure/iot-hub/tutorial-x509-test-certs)).
-  Whether the hub accepts it is for the live test of
-  [#11](https://github.com/asnielsen789/IIoT-platform/issues/11) to confirm.
+  The live test of [#11](https://github.com/asnielsen789/IIoT-platform/issues/11) confirmed that
+  the hub accepts it (2026-10-25).
 - **The certificate is offered whatever the server asks for.** .NET offers a client certificate
   from a collection only if its chain matches one of the CA names the server lists, and
   otherwise continues without one. IoT Hub does not document its list, so the client also sets a
@@ -321,21 +321,20 @@ and asserts that the device certificate is presented alone, verifies against the
 followed by a CONNECT with the usual username and an empty password. Everything is generated at
 runtime; no key or certificate is committed.
 
-**No test reaches beyond loopback.** Nothing below has been verified against a live hub, and
-none of it can be until [#9](https://github.com/asnielsen789/IIoT-platform/issues/9) provisions
-one:
+**No test reaches beyond loopback.** What only a live hub can show was checked against staging
+instead:
 
-- that the documented topic string is accepted and routes on message content
-- that the username, `api-version` and SAS token are accepted by a real hub
-- TLS negotiation, keep-alive and reconnection behaviour
-- that IoT Hub stamps `iothub-connection-device-id` as the trust model assumes
-- throughput and throttling with a concurrent fleet
-
-The first live run is [#10](https://github.com/asnielsen789/IIoT-platform/issues/10).
-
-For certificates, the live test of
-[#11](https://github.com/asnielsen789/IIoT-platform/issues/11) settles what loopback cannot:
-
-- that IoT Hub accepts the device certificate sent without the issuing CA it has registered
-- that it accepts the zero-length password in a certificate device's CONNECT
-- that a certificate-authenticated device's message takes the route and is processed
+- **With a key** ([#10](https://github.com/asnielsen789/IIoT-platform/issues/10), 2026-10-15):
+  - the documented topic string is accepted and routes on message content;
+  - the username, `api-version` and SAS token are accepted;
+  - IoT Hub stamps `iothub-connection-device-id` as the trust model assumes.
+- **With a certificate** ([#11](https://github.com/asnielsen789/IIoT-platform/issues/11),
+  2026-10-25):
+  - IoT Hub accepts the device certificate sent without the issuing CA it has registered, and
+    the zero-length password in the CONNECT;
+  - the message takes the route and is processed;
+  - a disabled device is refused with `NotAuthorized`.
+- **Not yet verified:**
+  - keep-alive and reconnection behaviour;
+  - throughput and throttling with a concurrent fleet, which is the scale test
+    ([#20](https://github.com/asnielsen789/IIoT-platform/issues/20)).

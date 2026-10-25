@@ -283,9 +283,20 @@ Neither page mentions Flex Consumption specifically. Status values:
 | `SecretNotFound`, `VaultNotFound` | The deployment did not complete; go back to step 3 |
 
 Microsoft does not document whether a refresh makes running instances reconnect with the new
-value. Step 7 settles it. If the Function stops processing after a redeployment although the
-status is `Resolved`, restart the app and record what happened in
-[#9](https://github.com/asnielsen789/IIoT-platform/issues/9):
+value. Step 7 settles it. On 2026-10-25, after a redeployment while an instance was running, the
+next message was processed, yet nothing for that execution reached Application Insights; the next
+instance to start logged normally. So before concluding that the Function has stopped, check the
+app's own execution count, which does not depend on Application Insights:
+
+```sh
+az monitor metrics list --resource "$FUNC_APP" --resource-group "$RG" \
+  --resource-type Microsoft.Web/sites --metrics OnDemandFunctionExecutionCount \
+  --aggregation Total --interval 1m --offset 30m \
+  --query "value[0].timeseries[0].data[?total>\`0\`].{time:timeStamp, executions:total}" -o table
+```
+
+If the Function really has stopped processing although the status is `Resolved`, restart the
+app and record what happened in [#9](https://github.com/asnielsen789/IIoT-platform/issues/9):
 
 ```sh
 az functionapp restart --name "$FUNC_APP" --resource-group "$RG"
@@ -615,9 +626,11 @@ described in [`tools/IIoT.DeviceCa`](../tools/IIoT.DeviceCa/README.md), the devi
 [test client's README](../tools/IIoT.TestClient/README.md#certificate-authentication).
 
 > [!NOTE]
-> This procedure has not yet run against staging. The first run is the live test of
-> [#11](https://github.com/asnielsen789/IIoT-platform/issues/11); until then, what it says to
-> expect is what the code and Microsoft's documentation lead to expect.
+> First run against staging on 2026-10-25, the live test of
+> [#11](https://github.com/asnielsen789/IIoT-platform/issues/11). Every step worked as described
+> here, once two corrections from that run were made: Git Bash's path conversion (step 1) and the
+> subject IoT Hub shows (step 3). What the run settled is at the end, in
+> [What the first run settled](#what-the-first-run-settled).
 
 Run from the repository root in Git Bash, signed in with `az login` as the operator, in the
 shell where `RG`, `IOT_HUB` and `KEY_VAULT` are set (step 3 of [Deploy](#deploy)). The tool
@@ -667,20 +680,30 @@ KV_ID=$(az keyvault show --name "$KEY_VAULT" --resource-group "$RG" --query id -
 HUB_ID=$(az iot hub show --name "$IOT_HUB" --resource-group "$RG" --query id -o tsv | tr -d '\r')
 
 assign() {
-  az role assignment create --assignee-object-id "$ME" --assignee-principal-type User \
-    --role "$1" --scope "$2" --query roleDefinitionName -o tsv
+  MSYS_NO_PATHCONV=1 az role assignment create --assignee-object-id "$ME" --assignee-principal-type User \
+    --role "$1" --scope "$2" -o none
 }
 
 assign "Key Vault Crypto User" "$KV_ID/keys/device-ca-root"
 assign "Key Vault Crypto User" "$KV_ID/keys/device-ca-issuing"
 assign "Key Vault Secrets Officer" "$KV_ID"
 assign "IoT Hub Registry Contributor" "$HUB_ID"
+
+MSYS_NO_PATHCONV=1 az role assignment list --assignee "$ME" --all \
+  --query "[?contains(scope, '$KEY_VAULT') || contains(scope, '$IOT_HUB')].roleDefinitionName" -o tsv
 ```
 
-Each assignment prints its role name. The resource IDs contain the subscription ID, so they stay
-in variables and are never printed. Allow a few minutes before step 2: a new role assignment is
-not applied at once
-([Azure RBAC for Key Vault](https://learn.microsoft.com/azure/key-vault/general/rbac-guide#test-and-verify)).
+- **`MSYS_NO_PATHCONV=1`, on the role commands only.** A scope starts with `/subscriptions/`, and
+  Git Bash rewrites an argument that looks like an absolute path before passing it to a Windows
+  program, so `az` receives `C:/Program Files/Git/subscriptions/…` and fails with
+  `MissingSubscription`. The variable turns that rewriting off. It is set per command because
+  steps 3 to 5 pass file paths under `~`, which need the rewriting.
+- **The list shows the result.** On the first run, `az role assignment create` printed nothing
+  for a new assignment, so the last command lists the four roles instead: two Key Vault Crypto
+  User, one Key Vault Secrets Officer and one IoT Hub Registry Contributor. The resource IDs
+  contain the subscription ID, so they stay in variables and are never printed.
+- Allow a few minutes before step 2: a new role assignment is not applied at once
+  ([Azure RBAC for Key Vault](https://learn.microsoft.com/azure/key-vault/general/rbac-guide#test-and-verify)).
 
 ### 2. Create the CA certificates
 
@@ -698,7 +721,7 @@ nothing and says so; go on to step 3, and use `--force` only to start the CA aga
 Then trade Secrets Officer on the vault for Secrets User on the two certificates:
 
 ```sh
-az role assignment delete --assignee "$ME" --role "Key Vault Secrets Officer" --scope "$KV_ID"
+MSYS_NO_PATHCONV=1 az role assignment delete --assignee "$ME" --role "Key Vault Secrets Officer" --scope "$KV_ID"
 assign "Key Vault Secrets User" "$KV_ID/secrets/device-ca-root-certificate"
 assign "Key Vault Secrets User" "$KV_ID/secrets/device-ca-issuing-certificate"
 ```
@@ -718,8 +741,8 @@ az iot hub certificate create --hub-name "$IOT_HUB" --resource-group "$RG" \
   --query "{name:name, verified:properties.isVerified, subject:properties.subject, thumbprint:properties.thumbprint}" -o table
 ```
 
-It worked when the table shows `device-ca-issuing`, `True`, `CN=IIoT Device Issuing CA` and the
-SHA-1 thumbprint `ca-certificate` printed. The command and its `--verified` flag are documented in
+It worked when the table shows `device-ca-issuing`, `True`, `IIoT Device Issuing CA` (IoT Hub
+shows the subject without `CN=`) and the SHA-1 thumbprint `ca-certificate` printed. The command and its `--verified` flag are documented in
 the [Azure CLI reference](https://learn.microsoft.com/cli/azure/iot/hub/certificate#az-iot-hub-certificate-create);
 `--verified` sets the certificate's status to verified on upload, as Microsoft's own walkthrough
 does for a subordinate CA
@@ -784,8 +807,8 @@ If it does not connect:
 | Symptom | Likely cause |
 |---|---|
 | The client refuses before connecting, naming the certificate's CN | The `--cert` file is another device's; the CN must be the device ID |
-| The TLS handshake fails | The issuing CA certificate is not registered or not verified (step 3), or IoT Hub wants the chain sent; see the open points below |
-| `MqttConnectingFailedException` with `NotAuthorized` or `BadUserNameOrPassword`, or the connection closes right after the handshake | The device is not registered as CA-authenticated or is disabled (step 4), or IoT Hub does not accept the empty password; see the open points below |
+| The TLS handshake fails | The issuing CA certificate is not registered or not verified (step 3). Sending the device certificate alone is not the cause: it was accepted on the first run |
+| `connected: NotAuthorized`, or `MqttConnectingFailedException` with `NotAuthorized` or `BadUserNameOrPassword`, or the connection closes right after the handshake | The device is not registered as CA-authenticated, or is disabled (step 4). A disabled device gives exactly `connected: NotAuthorized` |
 
 **Revoking a device** is disabling it, since IoT Hub does not check revocation lists
 ([Revoke a device certificate](https://learn.microsoft.com/azure/iot-hub/authenticate-authorize-x509#revoke-a-device-certificate)).
@@ -808,23 +831,25 @@ az iot hub device-identity create --hub-name "$IOT_HUB" --device-id tank-000002 
 
 If the vault was purged instead, the CA is gone: see [Tearing down](#tearing-down).
 
-### Open points for the first run
+### What the first run settled
 
-Three things nothing offline can settle; the first run records the answers in
-[#11](https://github.com/asnielsen789/IIoT-platform/issues/11):
+Three things nothing offline could settle. The first run, on 2026-10-25, answered all three,
+and they are recorded in [#11](https://github.com/asnielsen789/IIoT-platform/issues/11):
 
-1. **The device certificate alone.** The test client sends its certificate without the issuing
-   CA ([why](../tools/IIoT.TestClient/README.md#what-goes-on-the-wire)). Microsoft's overview
-   says the device "presents its full certificate chain and the IoT hub can validate it because
-   it knows the X.509 CA"
-   ([Authenticate with X.509 certificates](https://learn.microsoft.com/azure/iot-hub/authenticate-authorize-x509#types-of-certificate-authentication));
-   with the issuing CA registered, the chain up to the CA the hub knows is the device
-   certificate alone.
-2. **The empty password.** IoT Hub needs no password from a certificate device; the client sends
-   the field empty rather than leaving it out.
-3. **Redeployment.** The CA certificate is a child resource of the hub that the templates do not
-   declare, so an incremental deployment should leave it registered. After the next
-   infrastructure deployment, check `az iot hub certificate list --hub-name "$IOT_HUB" --query "[].name" -o tsv`.
+1. **The device certificate alone is accepted.** The test client sends its certificate without
+   the issuing CA ([why](../tools/IIoT.TestClient/README.md#what-goes-on-the-wire)). Microsoft's
+   overview says the device "presents its full certificate chain and the IoT hub can validate it
+   because it knows the X.509 CA"
+   ([Authenticate with X.509 certificates](https://learn.microsoft.com/azure/iot-hub/authenticate-authorize-x509#types-of-certificate-authentication)).
+   With the issuing CA registered, the chain up to the CA the hub knows is the device certificate
+   alone, and the hub accepted it: `connected: Success`, and the `Connections` log records the
+   connection with authentication type `CA-Signed`.
+2. **The empty password is accepted.** The client sends the CONNECT's password field empty
+   rather than leaving it out, and the hub raised no objection.
+3. **The registration survives redeployment.** The CA certificate is a child resource of the hub
+   that the templates do not declare. After an incremental infrastructure deployment,
+   `az iot hub certificate list --hub-name "$IOT_HUB" --query "value[].name" -o tsv` still lists
+   `device-ca-issuing`, verified, with the same thumbprint, and `tank-000002` still connects.
 
 ## Naming
 
