@@ -74,8 +74,8 @@ devices/{deviceId}/messages/events/$.ct=application%2Fjson&$.ce=utf-8
 | `schemaVersion` | integer | Yes | Always `1` in this version. |
 | `messageId` | string (≤64) | Yes | Unique per message. Used for idempotency on resend. |
 | `deviceId` | string (≤128) | No | **Informational.** See section 4. |
-| `sentAt` | ISO 8601 | Yes | Transmission time according to the device clock. |
-| `sequence` | integer ≥0 | No | Monotonic per device. Gaps indicate lost messages. |
+| `sentAt` | RFC 3339 date-time | Yes | Transmission time according to the device clock. See section 4. |
+| `sequence` | integer ≥0 | No | Monotonic per device. Gaps indicate lost messages. Values up to 2⁶³−1 are read, which covers every unsigned 32-bit counter; a larger one is rejected with a reason. |
 | `measurements` | array (1–64) | Yes | At least one element. |
 | `device` | object | Yes | See section 3. |
 
@@ -86,7 +86,7 @@ devices/{deviceId}/messages/events/$.ct=application%2Fjson&$.ce=utf-8
 | `type` | `"level"` | Yes | Only `level` in v1. |
 | `value` | number 0–20000 | Yes | **Raw** measured value. No conversion on the device. |
 | `unit` | `"mm"` | Yes | UCUM code. |
-| `measuredAt` | ISO 8601 | Yes | Time of measurement, not of transmission. |
+| `measuredAt` | RFC 3339 date-time | Yes | Time of measurement, not of transmission. See section 4. |
 | `quality` | `ok`/`uncertain`/`bad` | No | The device's own assessment. Defaults to `ok`. |
 
 Multiple elements occur on **buffered transmission** after a network outage. Each element
@@ -149,8 +149,16 @@ Device clocks drift, and NB-IoT devices do not necessarily have a reliable RTC.
 - A message must **never** be rejected because `measuredAt` lies far in the past. That is
   the normal shape of buffered backfill after an outage — precisely the data most worth
   keeping.
-- The difference between `sentAt` and `enqueuedTime` is recorded as a metric so clock drift
-  across the fleet can be detected.
+- The difference between `sentAt` and `enqueuedTime` is to be recorded as a metric, so that
+  clock drift across the fleet can be detected. This is planned in
+  [#17](https://github.com/asnielsen789/IIoT-platform/issues/17) and not implemented yet.
+- Timestamps are RFC 3339 date-times (the schema's `format: date-time`), and the consumer reads
+  every one the schema accepts:
+  - `T` and `Z` may be lower case.
+  - A leap second, `23:59:60`, is stored as `23:59:59.9999999`, which keeps the order and
+    never rolls the date.
+  - An offset beyond ±14:00, an instant outside the years 0001–9999 UTC, or a separator other
+    than `T` is rejected, with the reason.
 
 ---
 
@@ -161,6 +169,7 @@ The CRA (Regulation (EU) 2024/2847) pulls in two directions on metadata. That is
 
 | CRA requirement | Wording (extract) | Consequence for the schema |
 |-----------------|-------------------|----------------------------|
+| Annex I, Part I, point (d) | *"ensure protection from unauthorised access by appropriate control mechanisms, including but not limited to authentication, identity or access management systems"* | Covered by device authentication, not by the payload. Each device has its own X.509 certificate from the platform's CA ([ADR-009](adr/adr-009-device-pki.md)), verified live in [#11](https://github.com/asnielsen789/IIoT-platform/issues/11). That is why the payload's `deviceId` is informational only (section 4). |
 | Annex I, Part I, point (e) | *"protect the confidentiality of stored, transmitted or otherwise processed data … by encrypting … in transit"* | Covered by MQTT over TLS. No encryption inside the payload. |
 | Annex I, Part I, point (f) | *"protect the integrity of … data … against any manipulation or modification not authorised"* | Covered by mTLS with X.509. Hence **no** per-message signature in v1. |
 | Annex I, Part I, point (g) | *"process only data … that are adequate, relevant and limited to what is necessary in relation to the intended purpose"* | **Constraining.** Only fields with a concrete operational or regulatory justification. Static attributes move to the device twin. |
@@ -196,6 +205,9 @@ in the field for years.
 - New optional fields
 - New values in `measurements[].type`
 - New optional fields in `device`
+- Loosening a constraint so that previously rejected messages are accepted. For example,
+  `device.battery` forbade unknown fields, contrary to consumer obligation 1, and was corrected
+  within v1 ([#54](https://github.com/asnielsen789/IIoT-platform/pull/54)).
 
 **Breaking changes** (require `schemaVersion: 2`):
 
@@ -209,7 +221,10 @@ in the field for years.
    exactly this case.
 2. An unknown `schemaVersion` must be rejected explicitly and logged — never interpreted
    as v1.
-3. Both rules must be covered by tests so they are not lost in refactoring.
+3. An object that repeats a member name is rejected. JSON Schema leaves the meaning of a
+   duplicate key undefined, and a validator and a parser can read different values: one
+   checking the first, the other using the last.
+4. All three rules must be covered by tests, so they are not lost in refactoring.
 
 ---
 

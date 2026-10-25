@@ -99,3 +99,24 @@ Event Hubs delivers at least once, so the gateway will see duplicates as a matte
 - [Azure Functions reliable event processing](https://learn.microsoft.com/azure/azure-functions/functions-reliable-event-processing)
   — checkpoint behaviour on exceptions
 - Hardt, D. (2012). *The OAuth 2.0 Authorization Framework* (RFC 6749). IETF
+
+## Update (2026-10-25): one retry on 401
+
+The Consequences above say that client errors other than the transient ones are not retried. A
+`401 Unauthorized` is now the exception
+([#54](https://github.com/asnielsen789/IIoT-platform/pull/54)). The forwarder discards the
+token, obtains a new one and sends the same request once more, with the same body and the same
+`Idempotency-Key`, so the gateway stores the batch once.
+
+- **Why.** A 401 is what a cached token meets once the identity provider has rotated its
+  signing keys. Without the retry, every Function instance lost one message per rotation,
+  because there is no dead-lettering yet
+  ([#19](https://github.com/asnielsen789/IIoT-platform/issues/19)).
+- **Bounded.** A 401 to the new token as well means that the gateway does not trust what the
+  provider issues: issuer, audience or keys disagree. It ends as `ForwardingFailed` and is
+  logged as an authentication failure. There is no third attempt, and a 403 is not retried.
+- **Separate from the transient retries.** The HTTP resilience pipeline does not treat 401 as
+  transient. The retry is one more pass through it, so the worst case is five attempts, never a
+  loop.
+
+The client's behaviour is specified in `docs/gateway-contract.md`, sections 4 to 6.
