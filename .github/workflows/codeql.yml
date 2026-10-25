@@ -1,6 +1,7 @@
 name: CodeQL
 
-# Static analysis (SAST) of the C# sources with GitHub CodeQL.
+# Static analysis (SAST) with GitHub CodeQL, of the C# sources and of the GitHub Actions
+# workflows.
 #
 # This is the "security testing" leg of the supply-chain work: Dependabot watches the
 # code we consume, CodeQL watches the code we write. Findings land in the repository's
@@ -8,7 +9,20 @@ name: CodeQL
 # vulnerabilities are being looked for systematically rather than ad hoc
 # (CRA Annex I Part II pt. 1-2).
 #
-# The check this workflow publishes is advisory. Branch protection on main requires only
+# The workflows are code we write too, and they hold the most powerful credential in the
+# repository: deploy.yml signs in to Azure with OIDC. A workflow that expands untrusted
+# input, such as a pull request title, into a script, or that checks out and runs a pull
+# request's code with elevated permissions, can be made to act with that credential.
+# CodeQL's `actions` language looks for exactly that.
+#
+# Both analyses run the `security-extended` query suite instead of the default one: the
+# default queries plus lower-severity and lower-precision ones. For the workflows that adds
+# the medium-severity variants of the injection and untrusted-checkout queries and the
+# check for actions referenced by a mutable tag. In a repository this size the extra
+# alerts are few and cheap to triage, and a missed one is not.
+# https://docs.github.com/en/code-security/code-scanning/managing-your-code-scanning-configuration/codeql-query-suites
+#
+# The checks this workflow publishes are advisory. Branch protection on main requires only
 # `Format, build and test` from ci.yml; a CodeQL alert is for a human to read, not an
 # automatic merge block.
 
@@ -27,8 +41,9 @@ on:
     - cron: "27 4 * * 1"
   workflow_dispatch:
 
-# Least privilege: read the sources, write the analysis results. Nothing else.
-# `actions: read` is only required for private repositories; this one is public.
+# Least privilege: read the sources, write the analysis results. Nothing else, and the same
+# for both jobs. `actions: read` is only required for private repositories; this one is
+# public.
 permissions:
   contents: read
   security-events: write
@@ -42,6 +57,13 @@ env:
   DOTNET_CLI_TELEMETRY_OPTOUT: true
   DOTNET_SKIP_FIRST_TIME_EXPERIENCE: true
 
+# Two jobs rather than a matrix: the C# analysis needs the .NET SDK, a restore and a build,
+# the workflow analysis needs none of them, and a matrix would hang an `if:` on every step
+# that differs.
+#
+# The C# job keeps the ID `analyze`. Code scanning records each analysis under a key made of
+# the workflow file and the job ID (.github/workflows/codeql.yml:analyze), so renaming the
+# job would start a new configuration and leave the old one behind, stale, on main.
 jobs:
   analyze:
     name: CodeQL analyse (csharp)
@@ -83,6 +105,7 @@ jobs:
         with:
           languages: csharp
           build-mode: manual
+          queries: security-extended
 
       # Solution-level restore, as in ci.yml. Directory.Solution.targets makes it run the
       # Functions post-restore hook, which a plain solution restore would skip (AZFW0108).
@@ -99,3 +122,32 @@ jobs:
         uses: github/codeql-action/analyze@6f2ac81f5cd81fe351a197ba0b00d91d03cd2aee # v4.39.0
         with:
           category: "/language:csharp"
+
+  analyze-actions:
+    name: CodeQL analyse (actions)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      # Actions are pinned to full commit SHAs rather than mutable tags.
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Workflow files are YAML, read as they are; there is nothing to compile, so the
+      # `actions` language takes `build-mode: none` and needs no .NET setup. It analyses
+      # every workflow under .github/workflows/ and any action.yml in the repository.
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@6f2ac81f5cd81fe351a197ba0b00d91d03cd2aee # v4.39.0
+        with:
+          languages: actions
+          build-mode: none
+          queries: security-extended
+
+      # A category of its own, so the two analyses of the same commit stay separate in the
+      # Code scanning tab and neither replaces the other's results.
+      - name: Perform CodeQL analysis
+        uses: github/codeql-action/analyze@6f2ac81f5cd81fe351a197ba0b00d91d03cd2aee # v4.39.0
+        with:
+          category: "/language:actions"
