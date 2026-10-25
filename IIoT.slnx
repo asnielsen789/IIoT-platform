@@ -5,10 +5,12 @@
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/IIoT.Core.Tests/IIoT.Core.Tests.csproj" />
+    <Project Path="tests/IIoT.DeviceCa.Tests/IIoT.DeviceCa.Tests.csproj" />
     <Project Path="tests/IIoT.Integration.Tests/IIoT.Integration.Tests.csproj" />
     <Project Path="tests/IIoT.TestClient.Tests/IIoT.TestClient.Tests.csproj" />
   </Folder>
   <Folder Name="/tools/">
+    <Project Path="tools/IIoT.DeviceCa/IIoT.DeviceCa.csproj" />
     <Project Path="tools/IIoT.GatewayMock/IIoT.GatewayMock.csproj" />
     <Project Path="tools/IIoT.TestClient/IIoT.TestClient.csproj" />
   </Folder>

@@ -6,12 +6,13 @@ namespace IIoT.TestClient.Authentication;
 /// How one simulated device proves its identity to IoT Hub.
 /// </summary>
 /// <remarks>
-/// Split out so X.509 client certificates can be added as a second implementation without
-/// touching the connection or publishing code — see
-/// https://github.com/asnielsen789/IIoT-platform/issues/11. The two mechanisms differ in exactly
-/// two places, and those are the two members here: a SAS device supplies a password and leaves TLS
-/// alone, while a certificate device supplies no password and contributes a client certificate.
-/// The MQTT username is identical for both and is therefore not part of this interface.
+/// Two implementations: <see cref="SharedAccessKeyAuthentication"/> and
+/// <see cref="X509CertificateAuthentication"/>, the second added for
+/// https://github.com/asnielsen789/IIoT-platform/issues/11 without touching the connection or
+/// publishing code. The two mechanisms differ in exactly two places, and those are the two members
+/// here: a SAS device supplies a password and leaves TLS alone, while a certificate device supplies
+/// no password and contributes a client certificate. The MQTT username is identical for both and
+/// is therefore not part of this interface.
 /// </remarks>
 public interface IDeviceAuthentication
 {

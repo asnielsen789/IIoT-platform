@@ -83,6 +83,13 @@ var telemetryConnectionSecretName = 'iothub-telemetry-connection'
 // module and handed to the Function App as the IoTHubConsumerGroup setting.
 var telemetryConsumerGroupName = 'telemetry-function'
 
+// The device certificate authority's two signing keys, root and issuing (ADR-009). The names are
+// fixed: tools/IIoT.DeviceCa looks the keys up by them.
+var deviceCaKeyNames = [
+  'device-ca-root'
+  'device-ca-issuing'
+]
+
 resource rg 'Microsoft.Resources/resourceGroups@2025-04-01' = {
   name: names.resourceGroup
   location: location
@@ -133,6 +140,21 @@ module keyVault 'modules/key-vault.bicep' = {
   }
   dependsOn: [
     identity
+  ]
+}
+
+// The keys only. Nothing in Azure uses them at runtime: an operator signs with them through the
+// signing tool, with the data-plane roles listed in infra/README.md, which this template does not
+// grant. No output: the tool finds the keys by name.
+module deviceCaKeys 'modules/device-ca-keys.bicep' = {
+  scope: rg
+  params: {
+    keyVaultName: names.keyVault
+    keyNames: deviceCaKeyNames
+    tags: tags
+  }
+  dependsOn: [
+    keyVault
   ]
 }
 

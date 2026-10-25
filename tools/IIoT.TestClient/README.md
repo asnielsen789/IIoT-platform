@@ -4,10 +4,12 @@ A console application that stands in for device firmware. It publishes the contr
 payloads to Azure IoT Hub over **raw MQTT/TLS**, so the platform can be exercised end to end
 before any hardware exists.
 
-> **Never commit a devices file, a device key or a connection string.** Everything secret is
-> supplied at runtime — command line or environment — and this tool reads no configuration file
-> other than the one you point `--devices` at. There is no `appsettings.json`, no user-secrets id
-> and no gitignored-but-expected file. Keep your devices file outside the repository.
+> **Never commit a devices file, a device key, a device's private key or a connection string.**
+> Everything secret is supplied at runtime — command line or environment — and this tool reads
+> no configuration file other than the ones you point `--devices`, `--cert` and `--key` at. There
+> is no `appsettings.json`, no user-secrets id and no gitignored-but-expected file. Keep your
+> devices file and your device private keys outside the repository; `create-csr` writes keys to
+> `~/.secrets/iiot` by default.
 
 ---
 
@@ -62,10 +64,13 @@ Nothing here works without a hub. In order:
 4. **Outbound TCP 8883.** Many corporate and campus networks block it. There is no WebSocket
    fallback in this client, because the real device does not have one either.
 
-Device authentication is a shared access key for now. X.509 client certificates — the platform's
-intended mechanism — are [#11](https://github.com/asnielsen789/IIoT-platform/issues/11); the
-authentication seam (`IDeviceAuthentication`) exists so adding them does not restructure the
-client.
+That is a device with a shared access key, the quick way to exercise a hub. The platform's
+intended mechanism is an X.509 client certificate from the device CA
+([ADR-009](../../docs/adr/adr-009-device-pki.md),
+[#11](https://github.com/asnielsen789/IIoT-platform/issues/11)): see
+[Certificate authentication](#certificate-authentication). Both go through the same
+authentication seam (`IDeviceAuthentication`), so the connection and publishing code is the same
+for both.
 
 ---
 
@@ -116,6 +121,107 @@ Ctrl+C stops at a message boundary and each device sends a clean MQTT DISCONNECT
 
 ---
 
+## Certificate authentication
+
+The device's side of [ADR-009](../../docs/adr/adr-009-device-pki.md): the device makes its own
+key pair and a certificate signing request (CSR), the device CA issues a certificate for it, and
+the device connects with that certificate over mutual TLS. The private key never leaves the
+device, which here means it never leaves the directory `create-csr` writes it to. The whole
+procedure, including the CA's side and the roles it needs, is
+[Device certificate authority (one-time)](../../infra/README.md#device-certificate-authority-one-time)
+in the infrastructure README; this is the client's part of it.
+
+1. **Make a key and a CSR**, as device firmware would on its first start. This connects to
+   nothing:
+
+   ```
+   dotnet run --project tools/IIoT.TestClient -- create-csr --device-id tank-000002
+   ```
+
+   It writes `~/.secrets/iiot/tank-000002.key.pem`, a new EC P-256 private key (unencrypted
+   PKCS#8), and `~/.secrets/iiot/tank-000002.csr.pem`, the request, which asks for
+   `CN=tank-000002`. On Linux and macOS the key is created readable by you only, in a directory
+   only you can open. It never overwrites a file: a device keeps its key. `--out <dir>` writes
+   elsewhere, but not into the repository: `*.key.pem` is gitignored as a guard, not as a place
+   to keep keys.
+
+2. **Have the CA issue the certificate**, which also registers the device in IoT Hub
+   ([`IIoT.DeviceCa`](../IIoT.DeviceCa/README.md)):
+
+   ```
+   dotnet run --project tools/IIoT.DeviceCa -- issue --vault <vault> --hub <hub> \
+     --csr ~/.secrets/iiot/tank-000002.csr.pem --device-id tank-000002 --out ~/.secrets/iiot
+   ```
+
+3. **Connect with it.** Check the files first with `--dry-run`, which loads and checks them and
+   prints the certificate's subject, issuer, expiry and thumbprint without connecting:
+
+   ```
+   dotnet run --project tools/IIoT.TestClient -- --hub <hub> --device-id tank-000002 \
+     --cert ~/.secrets/iiot/tank-000002.chain.pem --key ~/.secrets/iiot/tank-000002.key.pem \
+     --once --dry-run
+   ```
+
+   Then the same without `--dry-run`. Every other option works as with a key: `--fixture`,
+   `--no-mutate`, `--interval`, `--count`.
+
+### What the client checks before connecting
+
+A certificate problem otherwise shows up only as a refused TLS handshake or CONNECT, with no
+reason given, so the client checks first and says what is wrong:
+
+- **The certificate's CN is exactly the device ID**, case included. IoT Hub authenticates a
+  CA-signed device only if its certificate's subject is `CN=<deviceId>`
+  ([Authenticate with X.509 certificates](https://learn.microsoft.com/azure/iot-hub/authenticate-authorize-x509#sign-devices-into-the-certificate-chain-of-trust)).
+- **The key belongs to the certificate**, and is an unencrypted PEM key.
+- **The certificate is valid now.**
+- **The options fit together.** `--cert` and `--key` go together, and not with `--device-key`,
+  `--devices`, a `--device-count` above 1, or `--sas-lifetime`. With `--cert`, `DEVICE_KEY` and
+  `DEVICES_FILE` in the environment are ignored, so a shell left over from a key session does not
+  get in the way; `IOT_HUB` and `DEVICE_ID` still apply.
+
+### What goes on the wire
+
+- **The device certificate alone, not the chain.** `--cert` takes the `.chain.pem` that `issue`
+  writes (device certificate, then the issuing CA) or the `.cert.pem`; either way only the first
+  certificate is sent. MQTTnet 5.2.0.1603 gives .NET's TLS a plain certificate collection
+  (`SslClientAuthenticationOptions.ClientCertificates`, set in `MqttTcpChannel`) and never an
+  `SslStreamCertificateContext`, the .NET type that carries intermediates; its stream-provider
+  extension point is documented as not doing TLS, so there is no other place to put one. On
+  Windows, building that context with intermediates would also write them into your certificate
+  store (`CurrentUser\CA`). Nothing is lost: IoT Hub has the issuing CA itself registered, which
+  is the device certificate's direct issuer, so the device certificate alone is a complete path
+  to it, and every handshake over NB-IoT is one certificate smaller. Microsoft's walkthrough does
+  the same: it registers the subordinate CA that signs the devices
+  ([Create and upload certificates for testing](https://learn.microsoft.com/azure/iot-hub/tutorial-x509-test-certs)).
+  Whether the hub accepts it is for the live test of
+  [#11](https://github.com/asnielsen789/IIoT-platform/issues/11) to confirm.
+- **The certificate is offered whatever the server asks for.** .NET offers a client certificate
+  from a collection only if its chain matches one of the CA names the server lists, and
+  otherwise continues without one. IoT Hub does not document its list, so the client also sets a
+  selection handler that always returns the device certificate.
+- **No password.** The CONNECT has the same client ID and username as with a key, and a
+  zero-length password: IoT Hub needs no SAS token from a certificate device
+  ([Use MQTT to communicate with IoT Hub](https://learn.microsoft.com/azure/iot-hub/iot-mqtt-connect-to-iot-hub#use-the-mqtt-protocol-directly-from-a-device)).
+
+### On Windows: a temporary copy of the key
+
+Windows' TLS stack, SChannel, refuses a client certificate whose private key was loaded straight
+from PEM, which gives an ephemeral key; the handshake fails with "The credentials supplied to the
+package were not recognized". The client therefore re-imports the certificate and key through
+PKCS#12 after loading them. On Windows that puts the key in a temporary key container, a file in
+`%APPDATA%\Microsoft\Crypto\Keys`, for as long as the client runs; it is deleted when the run
+ends, Ctrl+C included. A process that is killed rather than stopped can leave that file behind.
+On Linux the round trip stays in memory.
+
+### Not with a fleet
+
+Certificate authentication is for one device per client. `--cert` with `--devices` or a
+`--device-count` above 1 is rejected: a fleet would need a certificate and a key per device in
+the devices file, a format of its own, and nothing in #11 needs it. Run one client per device.
+
+---
+
 ## Options
 
 | Option | Env | Default | What it does |
@@ -123,6 +229,8 @@ Ctrl+C stops at a message boundary and each device sends a clean MQTT DISCONNECT
 | `--hub <name\|hostname>` | `IOT_HUB` | — | The hub. A bare name gains `.azure-devices.net`; anything containing a dot is used verbatim, so a sovereign-cloud hostname works too. |
 | `--device-id <id>` | `DEVICE_ID` | — | A registered device identity. |
 | `--device-key <key>` | `DEVICE_KEY` | — | That device's base64 shared access key. |
+| `--cert <file>` | — | — | The device's X.509 certificate, PEM, device certificate first: the `.chain.pem` or `.cert.pem` from `IIoT.DeviceCa issue`. Its CN must be the device ID. Selects [certificate authentication](#certificate-authentication); then `DEVICE_KEY` and `DEVICES_FILE` are ignored. |
+| `--key <file>` | — | — | The private key `create-csr` wrote for that certificate. Required with `--cert`. |
 | `--devices <path>` | `DEVICES_FILE` | — | A fleet file (format below). Mutually exclusive with the two options above in practice; if both are given, the file wins. |
 | `--device-count <n>` | — | `1` | Simulate *n* devices concurrently, taking the first *n* entries of the fleet file. Above 1 requires `--devices`: one key authenticates one identity. |
 | `--interval <seconds>` | — | `60` | Delay between messages, per device. |
@@ -130,9 +238,16 @@ Ctrl+C stops at a message boundary and each device sends a clean MQTT DISCONNECT
 | `--once` | — | — | Shorthand for `--count 1`. |
 | `--fixture <selector>` | — | `valid` | `all`, `valid`, `invalid`, or a fixture name such as `valid-buffered-backfill` (the `.json` is optional). An unknown name is an error, never an empty run. |
 | `--no-mutate` | — | — | Send fixture bytes verbatim. See below. |
-| `--sas-lifetime <minutes>` | — | `60` | SAS token validity. |
-| `--dry-run` | — | — | Build and print messages; connect to nothing. |
+| `--sas-lifetime <minutes>` | — | `60` | SAS token validity. Not with `--cert`. |
+| `--dry-run` | — | — | Build and print messages; connect to nothing. With `--cert`, also loads and checks the certificate and key. |
 | `-h`, `--help` | — | — | Usage. |
+
+`create-csr` takes two options of its own, and no others:
+
+| Option | Env | Default | What it does |
+|---|---|---|---|
+| `--device-id <id>` | `DEVICE_ID` | — | The device the new key is for; the CSR asks for `CN=<id>`. |
+| `--out <dir>` | — | `~/.secrets/iiot` | Where `<id>.key.pem` and `<id>.csr.pem` are written. Created if missing. |
 
 ### Fixture file
 
@@ -197,7 +312,16 @@ One test runs every mutated `valid-*` fixture through `IIoT.Core`'s own `Telemet
 test project references `IIoT.Core` even though the client does not — which is what proves the
 client and the Function agree about the contract rather than merely agreeing with each other.
 
-**No test opens a network connection.** Nothing below has been verified against a live hub, and
+For certificates, the tests generate a key and CSR with the client, check the CSR with the device
+CA's own `DeviceCertificateRequest`, and issue the certificate with the CA's own
+`CertificateAuthority`; the test project references `IIoT.DeviceCa` for that, as it references
+`IIoT.Core`. One test then runs a real TLS handshake on 127.0.0.1, TLS 1.2 and TLS 1.3, through
+`DeviceConnection` and MQTTnet against a local TLS server that requires a client certificate,
+and asserts that the device certificate is presented alone, verifies against the CA, and is
+followed by a CONNECT with the usual username and an empty password. Everything is generated at
+runtime; no key or certificate is committed.
+
+**No test reaches beyond loopback.** Nothing below has been verified against a live hub, and
 none of it can be until [#9](https://github.com/asnielsen789/IIoT-platform/issues/9) provisions
 one:
 
@@ -208,3 +332,10 @@ one:
 - throughput and throttling with a concurrent fleet
 
 The first live run is [#10](https://github.com/asnielsen789/IIoT-platform/issues/10).
+
+For certificates, the live test of
+[#11](https://github.com/asnielsen789/IIoT-platform/issues/11) settles what loopback cannot:
+
+- that IoT Hub accepts the device certificate sent without the issuing CA it has registered
+- that it accepts the zero-length password in a certificate device's CONNECT
+- that a certificate-authenticated device's message takes the route and is processed

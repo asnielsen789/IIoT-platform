@@ -37,6 +37,15 @@
       each other.
     -->
     <ProjectReference Include="..\..\src\IIoT.Core\IIoT.Core.csproj" />
+
+    <!--
+      The same reasoning for certificates: the client does not reference the device CA, but the
+      tests do. A CSR from the client is checked by the CA's own DeviceCertificateRequest, and the
+      certificate in the loopback TLS handshake is issued by the CA's own CertificateAuthority, so
+      the client and the CA are tested against each other rather than each against a copy of the
+      other's rules. Only the offline certificate classes are used; nothing reaches Azure.
+    -->
+    <ProjectReference Include="..\..\tools\IIoT.DeviceCa\IIoT.DeviceCa.csproj" />
   </ItemGroup>
 
 </Project>

@@ -27,8 +27,10 @@ updates:
       - "/src/IIoT.Core"
       - "/src/IIoT.Functions"
       - "/tests/IIoT.Core.Tests"
+      - "/tests/IIoT.DeviceCa.Tests"
       - "/tests/IIoT.Integration.Tests"
       - "/tests/IIoT.TestClient.Tests"
+      - "/tools/IIoT.DeviceCa"
       - "/tools/IIoT.GatewayMock"
       - "/tools/IIoT.TestClient"
     schedule:
