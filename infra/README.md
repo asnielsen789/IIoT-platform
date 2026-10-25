@@ -152,7 +152,9 @@ On a later deployment, nothing should be created. Read anything that is not `NoC
 expected `Modify` before going on. The first deployment after continuous deployment was added
 is the exception: it creates the deployment identity, its federated credential and its role
 assignment, three resources, and changes nothing else. So is the first deployment after the
-device certificate authority was added: it creates the two CA keys and changes nothing else. On
+device certificate authority was added: it creates the two CA keys and changes nothing else. The
+first deployment after the workspace's daily cap was added modifies the Log Analytics workspace
+(`workspaceCapping`) and nothing else ([Monitoring](#monitoring)). On
 later deployments the keys stay as they are: Azure creates a key only if none exists by that
 name, and never updates an existing one or adds a version to it
 ([Device certificate authority](#device-certificate-authority)).
@@ -1036,6 +1038,17 @@ The IoT Hub sends two resource log categories to the same workspace, where they 
 
 The other categories are left off. Platform metrics, the routing metrics included, need no
 diagnostic setting.
+
+The workspace has a **daily ingestion cap**, `logAnalyticsDailyQuotaGb` (50 MB in staging), as
+a backstop against cost: a crash loop that logs an exception on every restart is the likeliest
+way for this environment to run up a bill. When the cap is reached, collection stops for the
+rest of the day, until a reset hour that Azure picks and the portal shows, and some excess is
+still ingested and billed
+([Set daily cap on Log Analytics workspace](https://learn.microsoft.com/azure/azure-monitor/logs/daily-cap)).
+Application Insights is affected too, since its data goes to this workspace. An investigation
+that needs more, such as the scale test
+([#20](https://github.com/asnielsen789/IIoT-platform/issues/20)), raises the parameter for its
+duration.
 
 ## What the first deployment confirmed
 

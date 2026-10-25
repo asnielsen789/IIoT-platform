@@ -29,6 +29,9 @@ param iotHubSkuName string = 'F1'
 @maxValue(1000)
 param functionAppMaximumInstanceCount int = 10
 
+@description('Daily ingestion cap of the Log Analytics workspace, in GB, as a decimal string: Bicep has no floating-point type. Caps runaway cost from a logging surge such as a crash loop; once reached, ingestion stops until the workspace\'s daily reset. \'-1\' removes the cap.')
+param logAnalyticsDailyQuotaGb string = '0.05'
+
 @description('GitHub OIDC subject prefix of the repository whose workflows deploy the Function\'s code (#5), exactly as GitHub reports it: `gh api repos/OWNER/REPO/actions/oidc/customization/sub --jq .sub_claim_prefix`. Repositories created after 15 July 2026 use the immutable form `repo:OWNER@OWNER-ID/REPO@REPO-ID`, older ones `repo:OWNER/REPO`.')
 @minLength(6)
 param githubOidcSubjectPrefix string
@@ -110,6 +113,7 @@ module monitoring 'modules/monitoring.bicep' = {
   params: {
     logAnalyticsName: names.logAnalytics
     applicationInsightsName: names.applicationInsights
+    dailyQuotaGb: logAnalyticsDailyQuotaGb
     location: location
     tags: tags
   }
