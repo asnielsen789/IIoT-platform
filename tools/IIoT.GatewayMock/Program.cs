@@ -1,7 +1,6 @@
 using IIoT.GatewayMock.Authentication;
 using IIoT.GatewayMock.Readings;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
-using Microsoft.AspNetCore.Authorization;
 using Microsoft.Extensions.Options;
 
 // A stand-in for the downstream gateway: it accepts the platform's readings contract
@@ -21,9 +20,11 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme).AddJw
 builder.Services.ConfigureOptions<ConfigureJwtBearerOptions>();
 
 // No anonymous endpoints. The fallback policy applies to every endpoint that does not state its
-// own, so an endpoint added later is protected without anyone remembering to protect it.
+// own, so an endpoint added later is protected without anyone remembering to protect it. Default
+// and fallback both name the bearer scheme (see ApiAuthorization): no other scheme can satisfy them.
 builder.Services.AddAuthorizationBuilder()
-    .SetFallbackPolicy(new AuthorizationPolicyBuilder().RequireAuthenticatedUser().Build());
+    .SetDefaultPolicy(ApiAuthorization.Policy)
+    .SetFallbackPolicy(ApiAuthorization.Policy);
 
 builder.Services.AddProblemDetails();
 builder.Services.AddSingleton<ReadingStore>();
