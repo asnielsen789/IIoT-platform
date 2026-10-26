@@ -105,9 +105,15 @@ sequenceDiagram
 
     Note over AF,GW: Service-to-service auth
     AF->>A0: Request JWT token (client credentials)
-    A0-->>AF: JWT token (1h lifetime, cached)
+    A0-->>AF: JWT token (cached, renewed before expiry)
 
     AF->>GW: HTTPS POST /v1/readings (batch + JWT + Idempotency-Key)
+    alt 401 (token signed with a key the provider has rotated out)
+        GW-->>AF: 401 Unauthorized
+        AF->>A0: Request a new JWT
+        A0-->>AF: New JWT token
+        AF->>GW: Same POST, same Idempotency-Key (once)
+    end
     GW-->>AF: 202 Accepted
 
     Note over AF: Log result to Application Insights
@@ -115,7 +121,8 @@ sequenceDiagram
 
 ## Sequence: cloud-to-device configuration
 
-Sending a configuration message to a device.
+Sending a configuration message to a device. This is planned in
+[#16](https://github.com/asnielsen789/IIoT-platform/issues/16) and not implemented yet.
 
 ```mermaid
 sequenceDiagram
@@ -155,11 +162,13 @@ So that migration from a current to a future downstream interface stays cheap:
 Azure Function
     └── IDataForwarder (interface)
             ├── GatewayV1Forwarder       ← current gateway format
-            └── GatewayV2Forwarder       ← future format (stub)
+            └── GatewayV2Forwarder       ← future format (backlog, not implemented)
 ```
 
-Forwarder selection is driven by configuration (environment variable / app setting) rather
-than a code change. Both implementations can run in parallel during a transition period.
+Today the Function registers `GatewayV1Forwarder` directly
+(`src/IIoT.Functions/ForwardingServiceCollectionExtensions.cs`). Once a second forwarder
+exists, the plan is to select it by configuration (an app setting) rather than a code change,
+so both can run in parallel during a transition period.
 
 The forwarder receives the whole validated message together with a forwarding context — the
 authenticated device identity and IoT Hub's enqueued time — so identity and receipt time
