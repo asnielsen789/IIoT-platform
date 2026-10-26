@@ -1,5 +1,6 @@
 using IIoT.GatewayMock.Authentication;
 using IIoT.GatewayMock.Dashboard;
+using IIoT.GatewayMock.Hosting;
 using IIoT.GatewayMock.Readings;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.Extensions.Options;
@@ -30,6 +31,11 @@ if (dashboardEnabled)
     builder.Services.AddDashboard(authentication);
 }
 
+// Behind a TLS-terminating proxy the sign-in needs the scheme the browser used, from the proxy's
+// X-Forwarded-Proto — believed only from addresses the configuration trusts. On with the dashboard
+// unless GatewayMock:ForwardedHeaders:Enabled says otherwise; see GatewayForwardedHeadersOptions.
+var forwardedHeadersEnabled = builder.Services.AddGatewayForwardedHeaders(builder.Configuration, dashboardEnabled);
+
 // No anonymous endpoints. The fallback policy applies to every endpoint that does not state its
 // own, so an endpoint added later is protected without anyone remembering to protect it. Default
 // and fallback both name the bearer scheme (see ApiAuthorization): no other scheme can satisfy them.
@@ -42,6 +48,12 @@ builder.Services.AddSingleton<ReadingStore>();
 builder.Services.AddSingleton(TimeProvider.System);
 
 var app = builder.Build();
+
+// First, so that everything after it, the sign-in included, sees the scheme the browser used.
+if (forwardedHeadersEnabled)
+{
+    app.UseForwardedHeaders();
+}
 
 app.UseAuthentication();
 app.UseAuthorization();

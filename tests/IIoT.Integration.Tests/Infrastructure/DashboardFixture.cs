@@ -25,6 +25,12 @@ public sealed class DashboardFixture : IDisposable
     public const string SignedOutCallbackPath = "/dashboard/signout-callback-oidc";
     public const string SessionCookieName = "IIoT.GatewayMock.Dashboard";
 
+    /// <summary>
+    /// The network the fixture's mock believes <c>X-Forwarded-Proto</c> from: where its
+    /// TLS-terminating proxy would connect from.
+    /// </summary>
+    public const string TrustedProxyNetwork = "10.0.0.0/8";
+
     public DashboardFixture()
     {
         Issuer = new TestTokenIssuer();
@@ -35,6 +41,8 @@ public sealed class DashboardFixture : IDisposable
         {
             settings[key] = value;
         }
+
+        settings["GatewayMock:ForwardedHeaders:KnownNetworks:0"] = TrustedProxyNetwork;
 
         Factory = new GatewayMockFactory(settings, services => StandInForTheProvider(services, Provider));
     }
