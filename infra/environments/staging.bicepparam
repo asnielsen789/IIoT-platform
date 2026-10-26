@@ -29,6 +29,16 @@ param logAnalyticsDailyQuotaGb = '0.05'
 param gatewayAuthTokenEndpoint = 'https://iiot-staging.eu.auth0.com/oauth/token'
 param gatewayAuthAudience = 'https://gateway.iiot.example'
 
+// The tenant's issuer, as its tokens carry it in `iss` and its discovery document states it:
+// with the trailing slash. The hosted gateway mock (#15) accepts tokens from this issuer only.
+param gatewayAuthIssuer = 'https://iiot-staging.eu.auth0.com/'
+
+// Sweden Central, not North Europe: on 2026-10-26 this subscription's App Service quota for the
+// free tier (F1) was 0 in North Europe, Germany West Central and UK South, and 1 in Sweden Central
+// and France Central (preflight validation, `SubscriptionIsOverQuotaForSku`). The mock is a
+// separate component; it stays in the EU, and only its calls from the Function cross regions.
+param gatewayMockLocation = 'swedencentral'
+
 // The repository whose deploy workflow may deploy the Function's code (#5). It was created after
 // 15 July 2026, so GitHub issues it OIDC subjects in the immutable form, with the owner's and the
 // repository's numeric IDs after the names: a deleted and re-created, or renamed and re-used,
