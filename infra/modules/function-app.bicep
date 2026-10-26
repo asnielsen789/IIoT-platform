@@ -43,6 +43,18 @@ param iotHubConnectionSecretUri string
 @description('Consumer group on the IoT Hub built-in endpoint that the trigger reads.')
 param iotHubConsumerGroupName string
 
+@description('OAuth 2.0 token endpoint for the downstream gateway\'s access token (GatewayAuth:TokenEndpoint).')
+param gatewayAuthTokenEndpoint string
+
+@description('Audience requested for the downstream gateway\'s access token (GatewayAuth:Audience).')
+param gatewayAuthAudience string
+
+@description('Versionless URI of the Key Vault secret holding the gateway OAuth client ID.')
+param gatewayAuthClientIdSecretUri string
+
+@description('Versionless URI of the Key Vault secret holding the gateway OAuth client secret.')
+param gatewayAuthClientSecretSecretUri string
+
 @description('Upper bound on on-demand instances. Caps runaway cost and the share of the regional Flex Consumption core quota the app can take.')
 @minValue(1)
 @maxValue(1000)
@@ -149,6 +161,28 @@ resource functionApp 'Microsoft.Web/sites@2025-03-01' = {
         {
           name: 'IoTHubConsumerGroup'
           value: iotHubConsumerGroupName
+        }
+        // Service-to-service authentication to the downstream gateway (#12): OAuth 2.0 client
+        // credentials, bound to ClientCredentialsOptions from the GatewayAuth section
+        // (ForwardingServiceCollectionExtensions). The token endpoint and the audience are public;
+        // both appear in every token. The client ID and secret are Key Vault references, like
+        // IoTHubConnection, to secrets the operator writes. The client authentication method is
+        // left at its default, client_secret_post, which is also the Auth0 application's.
+        {
+          name: 'GatewayAuth__TokenEndpoint'
+          value: gatewayAuthTokenEndpoint
+        }
+        {
+          name: 'GatewayAuth__Audience'
+          value: gatewayAuthAudience
+        }
+        {
+          name: 'GatewayAuth__ClientId'
+          value: '@Microsoft.KeyVault(SecretUri=${gatewayAuthClientIdSecretUri})'
+        }
+        {
+          name: 'GatewayAuth__ClientSecret'
+          value: '@Microsoft.KeyVault(SecretUri=${gatewayAuthClientSecretSecretUri})'
         }
       ]
     }

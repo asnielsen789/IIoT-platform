@@ -21,6 +21,14 @@ param functionAppMaximumInstanceCount = 10
 // small part of the 100 DKK monthly budget (#1) even if all of it were billed.
 param logAnalyticsDailyQuotaGb = '0.05'
 
+// The Function's identity provider for the downstream gateway (#12): an Auth0 tenant in the EU
+// region. Both values are public: the token endpoint is the tenant's, and the audience is the
+// gateway API's identifier, which every token carries in its `aud` claim. `.example` is a
+// reserved domain: the identifier names the API and is never called. The client ID and secret
+// are in Key Vault (README.md, "Service-to-service authentication (one-time)").
+param gatewayAuthTokenEndpoint = 'https://iiot-staging.eu.auth0.com/oauth/token'
+param gatewayAuthAudience = 'https://gateway.iiot.example'
+
 // The repository whose deploy workflow may deploy the Function's code (#5). It was created after
 // 15 July 2026, so GitHub issues it OIDC subjects in the immutable form, with the owner's and the
 // repository's numeric IDs after the names: a deleted and re-created, or renamed and re-used,

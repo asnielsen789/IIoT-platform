@@ -50,7 +50,10 @@ configured; here a gap in the configuration is a refusal to start.
 
 ### Against Auth0
 
-Once the Auth0 tenant and API exist ([#12](https://github.com/asnielsen789/IIoT-platform/issues/12)):
+With the tenant and API set up as in
+[Service-to-service authentication (one-time)](../../infra/README.md#service-to-service-authentication-one-time)
+([#12](https://github.com/asnielsen789/IIoT-platform/issues/12)), which also shows how to send it a
+token from the tenant:
 
 ```
 dotnet run --project tools/IIoT.GatewayMock -- \

@@ -240,8 +240,9 @@ jobs:
       # rotates no IoT Hub key, so nothing is stale after it: the refresh keeps the procedure
       # identical after every deployment of either kind, and reading the status back doubles
       # as a configuration health check, which fails the run if the app can no longer resolve
-      # its trigger's connection. `{subscriptionId}` is literal: az rest substitutes the
-      # signed-in subscription, so the ID appears in no URL.
+      # one of its Key Vault references: the trigger's connection, or the gateway credentials
+      # (#12), whose secrets the operator writes by hand. `{subscriptionId}` is literal: az rest
+      # substitutes the signed-in subscription, so the ID appears in no URL.
       #
       # Initialized means not resolved yet, and is polled. Denied access, a missing secret and a
       # missing vault fail at once; any other status is polled until the time limit.
@@ -253,28 +254,30 @@ jobs:
           refs="https://management.azure.com/subscriptions/{subscriptionId}/resourceGroups/$RESOURCE_GROUP/providers/Microsoft.Web/sites/$FUNCTION_APP/config/configreferences/appsettings"
           az rest --method post --url "$refs/refresh?api-version=2022-03-01" --output none
 
-          attempts=20
-          for attempt in $(seq 1 "$attempts"); do
-            reference=$(az rest --method get --url "$refs/IoTHubConnection?api-version=2022-03-01" --output json)
-            status=$(jq -r '.properties.status // "unknown"' <<< "$reference")
-            details=$(jq -r '.properties.details // ""' <<< "$reference")
-            case "$status" in
-              Resolved)
-                echo "IoTHubConnection: Resolved."
-                exit 0
-                ;;
-              AccessToKeyVaultDenied | SecretNotFound | VaultNotFound)
-                echo "::error title=Key Vault reference::IoTHubConnection is $status. $details See step 5 of \"Deploy\" in infra/README.md."
-                exit 1
-                ;;
-            esac
-            echo "IoTHubConnection: $status (attempt $attempt of $attempts)."
-            if [ "$attempt" -lt "$attempts" ]; then
-              sleep 15
-            fi
+          for setting in IoTHubConnection GatewayAuth__ClientId GatewayAuth__ClientSecret; do
+            attempts=20
+            for attempt in $(seq 1 "$attempts"); do
+              reference=$(az rest --method get --url "$refs/$setting?api-version=2022-03-01" --output json)
+              status=$(jq -r '.properties.status // "unknown"' <<< "$reference")
+              details=$(jq -r '.properties.details // ""' <<< "$reference")
+              case "$status" in
+                Resolved)
+                  echo "$setting: Resolved."
+                  continue 2
+                  ;;
+                AccessToKeyVaultDenied | SecretNotFound | VaultNotFound)
+                  echo "::error title=Key Vault reference::$setting is $status. $details See step 5 of \"Deploy\" in infra/README.md."
+                  exit 1
+                  ;;
+              esac
+              echo "$setting: $status (attempt $attempt of $attempts)."
+              if [ "$attempt" -lt "$attempts" ]; then
+                sleep 15
+              fi
+            done
+            echo "::error title=Key Vault reference::$setting did not resolve within 5 minutes. Last status: $status. $details"
+            exit 1
           done
-          echo "::error title=Key Vault reference::IoTHubConnection did not resolve within 5 minutes. Last status: $status. $details"
-          exit 1
 
       # A smoke check, not proof that telemetry is processed; a live message is (step 7 of
       # "Deploy" in infra/README.md). The listing is the platform's record of the app's

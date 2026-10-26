@@ -32,6 +32,12 @@ param functionAppMaximumInstanceCount int = 10
 @description('Daily ingestion cap of the Log Analytics workspace, in GB, as a decimal string: Bicep has no floating-point type. Caps runaway cost from a logging surge such as a crash loop; once reached, ingestion stops until the workspace\'s daily reset. \'-1\' removes the cap.')
 param logAnalyticsDailyQuotaGb string = '0.05'
 
+@description('OAuth 2.0 token endpoint the Function obtains the downstream gateway\'s access token from, with the client-credentials grant (#12). For Auth0: `https://<tenant domain>/oauth/token`. Not a secret.')
+param gatewayAuthTokenEndpoint string
+
+@description('Audience the gateway\'s access token is requested for: the identifier of the gateway API at the identity provider, which the gateway checks in the `aud` claim. Not a secret.')
+param gatewayAuthAudience string
+
 @description('GitHub OIDC subject prefix of the repository whose workflows deploy the Function\'s code (#5), exactly as GitHub reports it: `gh api repos/OWNER/REPO/actions/oidc/customization/sub --jq .sub_claim_prefix`. Repositories created after 15 July 2026 use the immutable form `repo:OWNER@OWNER-ID/REPO@REPO-ID`, older ones `repo:OWNER/REPO`.')
 @minLength(6)
 param githubOidcSubjectPrefix string
@@ -85,6 +91,13 @@ var telemetryConnectionSecretName = 'iothub-telemetry-connection'
 // The Function's own consumer group on the hub's built-in endpoint (#9). Created by the IoT Hub
 // module and handed to the Function App as the IoTHubConsumerGroup setting.
 var telemetryConsumerGroupName = 'telemetry-function'
+
+// The Function's OAuth client credentials for the downstream gateway (#12). The operator writes
+// both secrets into the vault once (README.md, "Service-to-service authentication (one-time)");
+// the templates only reference them, so neither value is in the repository or in the deployment
+// history. The client ID is not a credential, but it stays out of the repository like every ID.
+var gatewayAuthClientIdSecretName = 'gateway-auth-client-id'
+var gatewayAuthClientSecretSecretName = 'gateway-auth-client-secret'
 
 // The device certificate authority's two signing keys, root and issuing (ADR-009). The names are
 // fixed: tools/IIoT.DeviceCa looks the keys up by them.
@@ -215,6 +228,10 @@ module functionApp 'modules/function-app.bicep' = {
     iotHubConnectionSecretUri: iotHubConnectionSecret.outputs.secretUri
     iotHubConsumerGroupName: telemetryConsumerGroupName
     maximumInstanceCount: functionAppMaximumInstanceCount
+    gatewayAuthTokenEndpoint: gatewayAuthTokenEndpoint
+    gatewayAuthAudience: gatewayAuthAudience
+    gatewayAuthClientIdSecretUri: '${keyVault.outputs.uri}secrets/${gatewayAuthClientIdSecretName}'
+    gatewayAuthClientSecretSecretUri: '${keyVault.outputs.uri}secrets/${gatewayAuthClientSecretSecretName}'
   }
   dependsOn: [
     monitoring

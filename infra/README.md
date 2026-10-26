@@ -154,8 +154,14 @@ is the exception: it creates the deployment identity, its federated credential a
 assignment, three resources, and changes nothing else. So is the first deployment after the
 device certificate authority was added: it creates the two CA keys and changes nothing else. The
 first deployment after the workspace's daily cap was added modifies the Log Analytics workspace
-(`workspaceCapping`) and nothing else ([Monitoring](#monitoring)). On
-later deployments the keys stay as they are: Azure creates a key only if none exists by that
+(`workspaceCapping`) and nothing else ([Monitoring](#monitoring)). The first deployment after
+the gateway credentials were added modifies the Function App's app settings, four
+`GatewayAuth__*` settings, and nothing else; write the two secrets first
+([Service-to-service authentication (one-time)](#service-to-service-authentication-one-time)).
+`what-if` does not show app settings at all, since Azure does not return them with the site, so
+that change is not in the plan; step 5 checks it afterwards. Once the CA keys exist, `what-if`
+also lists them as `Modify` with `rotationPolicy` to be deleted: noise, like the role
+assignments' `principalId`. On later deployments the keys stay as they are: Azure creates a key only if none exists by that
 name, and never updates an existing one or adds a version to it
 ([Device certificate authority](#device-certificate-authority)).
 
@@ -260,9 +266,11 @@ KV_REFS="https://management.azure.com/subscriptions/{subscriptionId}/resourceGro
 # Force the app to resolve every Key Vault reference again
 az rest --method post --url "$KV_REFS/refresh?api-version=2022-03-01"
 
-# The trigger's connection: expect status Resolved
-az rest --method get --url "$KV_REFS/IoTHubConnection?api-version=2022-03-01" \
-  --query "properties.{status:status, details:details}" -o table
+# The trigger's connection and the gateway credentials: expect Resolved for each
+for setting in IoTHubConnection GatewayAuth__ClientId GatewayAuth__ClientSecret; do
+  printf '%s: ' "$setting"
+  az rest --method get --url "$KV_REFS/$setting?api-version=2022-03-01" --query "properties.status" -o tsv
+done
 ```
 
 `{subscriptionId}` stays exactly as written: `az rest` substitutes the signed-in subscription,
@@ -449,7 +457,10 @@ leave something behind:
 - **Key Vault** goes into soft delete for 90 days, and its name stays reserved: the next
   deployment fails because a vault with that name exists in a deleted state. Purge protection
   is off ([Key Vault](#key-vault)), so purge it, which is permanent and also removes the stale
-  connection string, or recover it. **Purging also destroys the device CA keys.** The next
+  connection string, or recover it. **Purging also deletes the gateway credentials**: write
+  them again before the next deployment
+  ([Service-to-service authentication (one-time)](#service-to-service-authentication-one-time)).
+  **Purging also destroys the device CA keys.** The next
   deployment creates new ones, and every certificate the old CA issued stops working: run
   [Device certificate authority (one-time)](#device-certificate-authority-one-time) again,
   with `init --force`, and issue every device a new certificate. Recovering the vault keeps the
@@ -615,6 +626,131 @@ has an empty deployment container until it does.
   branch policy refused it, as it should. (`deploy.yml` itself skips the deploy job off `main`.)
 - **AuthorizationFailed** right after the identity was created: its role assignment has not
   propagated yet. Re-run the failed job a few minutes later.
+
+## Service-to-service authentication (one-time)
+
+The Function authenticates to the downstream gateway with an OAuth 2.0 access token, obtained
+with the client-credentials grant
+([`gateway-contract.md`](../docs/gateway-contract.md), section 6). Staging uses an Auth0 tenant;
+the token provider is not specific to Auth0, and another provider is a matter of the same
+settings. Four app settings carry the configuration:
+
+| Setting | Value | Where it comes from |
+|---|---|---|
+| `GatewayAuth__TokenEndpoint` | `https://<tenant domain>/oauth/token` | `gatewayAuthTokenEndpoint` in the parameter file. Public |
+| `GatewayAuth__Audience` | The gateway API's identifier | `gatewayAuthAudience` in the parameter file. Public: every token carries it as `aud` |
+| `GatewayAuth__ClientId` | The application's client ID | Key Vault reference to the secret `gateway-auth-client-id` |
+| `GatewayAuth__ClientSecret` | The application's client secret | Key Vault reference to the secret `gateway-auth-client-secret` |
+
+The client ID is not a credential, but it stays out of the repository like every other ID. The
+templates only reference the two secrets; the operator writes them, so neither value is in the
+repository or in the deployment history.
+
+### 1. At the identity provider
+
+In Auth0, once per tenant:
+
+- **An API** for the gateway. Its identifier becomes the audience, and is never called, so a
+  reserved domain such as `https://gateway.iiot.example` serves. Signing algorithm **RS256**,
+  which the gateway mock requires.
+- **A machine-to-machine application** for the Function, authorised for that API, with no
+  permissions. It is first-party: leave "owned by a third party" off. Its grant types are client
+  credentials only, and its authentication method is **Client Secret (Post)**, which is the token
+  provider's default (`client_secret_post`).
+
+Set `gatewayAuthTokenEndpoint` and `gatewayAuthAudience` in the parameter file. The tenant's
+discovery document, `https://<tenant domain>/.well-known/openid-configuration`, shows the issuer
+(with its trailing slash) and the signing keys.
+
+### 2. Write the credentials into Key Vault
+
+Before the first infrastructure deployment that references them: until both secrets exist, the
+references do not resolve, and the deploy workflow's check fails. Writing secrets needs Key Vault
+Secrets Officer, on the vault, since the secrets do not exist yet to scope it to; it is removed
+again afterwards. `MSYS_NO_PATHCONV=1` is explained in
+[Device certificate authority (one-time)](#1-assign-the-operators-roles).
+
+```sh
+ME=$(az ad signed-in-user show --query id -o tsv | tr -d '\r')
+KV_ID=$(az keyvault show --name "$KEY_VAULT" --resource-group "$RG" --query id -o tsv | tr -d '\r')
+MSYS_NO_PATHCONV=1 az role assignment create --assignee-object-id "$ME" --assignee-principal-type User \
+  --role "Key Vault Secrets Officer" --scope "$KV_ID" -o none
+```
+
+Allow a few minutes for the assignment to apply, then write both values. The secret is read
+without echo, so it stays out of the terminal and the shell history:
+
+```sh
+read -r -p "Client ID: " GATEWAY_CLIENT_ID
+az keyvault secret set --vault-name "$KEY_VAULT" --name gateway-auth-client-id \
+  --value "$GATEWAY_CLIENT_ID" --query name -o tsv
+
+read -rs -p "Client secret: " GATEWAY_CLIENT_SECRET && echo
+az keyvault secret set --vault-name "$KEY_VAULT" --name gateway-auth-client-secret \
+  --value "$GATEWAY_CLIENT_SECRET" --query name -o tsv
+```
+
+Keep the shell open for step 3, which uses both variables. Then remove the role and the
+variables:
+
+```sh
+unset GATEWAY_CLIENT_ID GATEWAY_CLIENT_SECRET
+MSYS_NO_PATHCONV=1 az role assignment delete --assignee "$ME" --role "Key Vault Secrets Officer" --scope "$KV_ID"
+```
+
+After the next infrastructure deployment, step 5 of [Deploy](#deploy) shows the two
+`GatewayAuth__*` references as `Resolved`.
+
+### 3. Check the credentials against the gateway mock
+
+The Function cannot forward from staging until a reachable gateway exists
+([#15](https://github.com/asnielsen789/IIoT-platform/issues/15)), so the credentials are checked
+locally: a token from the identity provider, accepted by the gateway mock running against the
+same tenant. In one terminal, start the mock
+([`tools/IIoT.GatewayMock`](../tools/IIoT.GatewayMock/README.md#against-auth0)):
+
+```sh
+dotnet run --project tools/IIoT.GatewayMock -- \
+  --GatewayMock:Jwt:Authority=https://<tenant domain>/ \
+  --GatewayMock:Jwt:Issuer=https://<tenant domain>/ \
+  --GatewayMock:Jwt:Audience=<the API identifier>
+```
+
+In the shell from step 2, get a token the way the Function does, and send the contract's
+example batch with it:
+
+```sh
+TOKEN=$(curl -s https://<tenant domain>/oauth/token \
+  --data-urlencode grant_type=client_credentials \
+  --data-urlencode client_id="$GATEWAY_CLIENT_ID" \
+  --data-urlencode client_secret="$GATEWAY_CLIENT_SECRET" \
+  --data-urlencode audience=<the API identifier> | grep -o '"access_token":"[^"]*"' | cut -d'"' -f4)
+
+BODY=docs/schemas/gateway/examples/valid-single-reading.json
+KEY=$(grep -o '"messageId": *"[^"]*"' "$BODY" | cut -d'"' -f4)
+CURL_SSL_BACKEND=schannel curl -s -o /dev/null -w "%{http_code}\n" https://localhost:7180/v1/readings \
+  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -H "Idempotency-Key: $KEY" --data-binary @"$BODY"
+unset TOKEN
+```
+
+The commands need nothing beyond Git Bash:
+- **`grep` and `cut` read the JSON**, since `jq` is not part of Git Bash.
+- **`CURL_SSL_BACKEND=schannel`** makes Git Bash's `curl` verify the mock's certificate against the
+  Windows certificate store, which holds the trusted ASP.NET Core development certificate
+  (`dotnet dev-certs https --trust`). Its default backend, OpenSSL, has its own CA bundle without
+  that certificate and fails with exit code 60.
+
+It worked when the mock answers `202`, and `401` without the `Authorization` header. The token is
+a credential for as long as it lives: do not paste it anywhere, including into a token decoder
+website.
+
+### Rotating the client secret
+
+Rotate in Auth0, write the new value as a new version of `gateway-auth-client-secret` (step 2),
+then refresh the references (step 5 of [Deploy](#deploy)). The Function keeps its cached token
+until shortly before it expires, so forwarding continues meanwhile, but a token renewal with the
+old secret fails until the refresh.
 
 ## Device certificate authority (one-time)
 
@@ -910,7 +1046,7 @@ the app, comes later.
 |---|---|---|
 | Storage Blob Data Owner | Storage account | Host storage, the deployment package, Event Hubs trigger checkpoints |
 | Storage Table Data Contributor | Storage account | Diagnostic events the host writes when the app cannot start |
-| Key Vault Secrets User | Key Vault | Resolving the `IoTHubConnection` Key Vault reference |
+| Key Vault Secrets User | Key Vault | Resolving the Key Vault references: `IoTHubConnection` and the gateway credentials `GatewayAuth__ClientId` and `GatewayAuth__ClientSecret` |
 
 Host storage is identity-based (`AzureWebJobsStorage__accountName`, `__credential`,
 `__clientId`) and shared-key access to the storage account is disabled: no account key is used
