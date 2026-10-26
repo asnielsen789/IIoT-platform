@@ -130,9 +130,10 @@ public static partial class TelemetryJson
     /// <para>
     /// What is refused, with the reason: a separator other than <c>T</c>/<c>t</c> (JsonSchema.Net
     /// also lets a space and an underscore through, which RFC 3339's grammar does not have), an
-    /// offset beyond ±14:00, which no time zone uses and <see cref="DateTimeOffset"/> cannot hold,
-    /// and an instant outside the years 0001 to 9999 UTC. An old timestamp is never refused for
-    /// being old: that is buffered backfill.
+    /// RFC 9557 suffix such as <c>[Europe/Copenhagen]</c> (JsonSchema.Net accepts those under draft
+    /// 2020-12 from version 9.5), an offset beyond ±14:00, which no time zone uses and
+    /// <see cref="DateTimeOffset"/> cannot hold, and an instant outside the years 0001 to 9999 UTC.
+    /// An old timestamp is never refused for being old: that is buffered backfill.
     /// </para>
     /// <para>
     /// <c>-00:00</c>, RFC 3339's "offset unknown" (section 4.3), names the instant in UTC, and is

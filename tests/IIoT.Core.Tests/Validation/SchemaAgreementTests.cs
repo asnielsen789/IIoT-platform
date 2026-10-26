@@ -262,8 +262,7 @@ public class SchemaAgreementTests
 
         // JsonSchema.Net lets these through; RFC 3339's grammar has none of them.
         { "2026-09-14 06:00:10Z", "is not an RFC 3339 date-time" },
-        { "2026-09-14_06:00:10Z", "is not an RFC 3339 date-time" },
-        { "2026-09-14T06:00:10Z\n", "is not an RFC 3339 date-time" }
+        { "2026-09-14_06:00:10Z", "is not an RFC 3339 date-time" }
     };
 
     /// <summary>
@@ -283,6 +282,38 @@ public class SchemaAgreementTests
         Assert.False(result.IsValid);
         Assert.StartsWith("/measurements/0/measuredAt: '", result.Error, StringComparison.Ordinal);
         Assert.Contains(reason, result.Error!, StringComparison.Ordinal);
+    }
+
+    public static TheoryData<string> NotRfc3339WhicheverLayerRefuses => new()
+    {
+        // JsonSchema.Net up to 9.4 ended its date-time pattern with $, which also matches before a
+        // final newline, so the schema let this through and the reader refused it. 9.5 anchors with
+        // \z and refuses it itself.
+        "2026-09-14T06:00:10Z\n",
+
+        // RFC 9557 suffixes: a time zone name, an offset, a calendar tag. JsonSchema.Net up to 9.4
+        // refused them; 9.5 accepts them under draft 2020-12, so the reader refuses them instead.
+        "2026-09-14T06:00:10Z[Europe/Copenhagen]",
+        "2026-09-14T08:00:10+02:00[!+02:00]",
+        "2026-09-14T06:00:10Z[u-ca=iso8601]"
+    };
+
+    /// <summary>
+    /// None of these is an RFC 3339 date-time, but which layer refuses each one is up to the version
+    /// of the schema library: the schema's <c>date-time</c> check, or <see cref="TelemetryJson"/>'s
+    /// reader behind it. The contract is the outcome, not the layer: a rejection that names the field,
+    /// never an exception and never a message processed with a timestamp the platform misread.
+    /// </summary>
+    [Theory]
+    [MemberData(nameof(NotRfc3339WhicheverLayerRefuses))]
+    public void Timestamp_NotRfc3339_IsRejectedNamingTheField_WhicheverLayerRefuses(string measuredAt)
+    {
+        var payload = InlinePayload.Telemetry(measuredAt: measuredAt.Replace("\n", "\\n", StringComparison.Ordinal));
+
+        var result = TelemetryValidator.Validate(payload);
+
+        Assert.False(result.IsValid);
+        Assert.StartsWith("/measurements/0/measuredAt: ", result.Error, StringComparison.Ordinal);
     }
 
     /// <summary>The same holds for <c>sentAt</c>, and the reason names that field.</summary>
