@@ -120,6 +120,11 @@ var telemetryConsumerGroupName = 'telemetry-function'
 var gatewayAuthClientIdSecretName = 'gateway-auth-client-id'
 var gatewayAuthClientSecretSecretName = 'gateway-auth-client-secret'
 
+// The queue for messages whose forwarding failed (ADR-010); the storage module adds its poison
+// queue, '<name>-poison'. The name is fixed: the RetryForwarding trigger and the dead-letter writer
+// name it in code (DeadLetterQueues in src/IIoT.Functions).
+var forwardingFailedQueueName = 'forwarding-failed'
+
 // The device certificate authority's two signing keys, root and issuing (ADR-009). The names are
 // fixed: tools/IIoT.DeviceCa looks the keys up by them.
 var deviceCaKeyNames = [
@@ -162,6 +167,7 @@ module storage 'modules/storage.bicep' = {
     // The account serves this one app, so a fixed container name is enough.
     deploymentContainerName: 'app-package'
     functionIdentityName: names.identity
+    forwardingFailedQueueName: forwardingFailedQueueName
   }
   dependsOn: [
     identity
@@ -248,7 +254,8 @@ module gatewayMock 'modules/gateway-mock.bicep' = {
 // app, comes later. Through the module outputs it consumes and the explicit dependency on
 // monitoring, the app comes into being only after its identity, its role assignments (in the
 // storage and Key Vault modules) and the secret it references all exist. The secret module
-// depends on the IoT Hub module, so the consumer group the trigger reads exists too.
+// depends on the IoT Hub module, so the consumer group the trigger reads exists too, and the
+// storage module's outputs mean the dead-letter queues and their role assignments do.
 module functionApp 'modules/function-app.bicep' = {
   scope: rg
   params: {
@@ -270,6 +277,7 @@ module functionApp 'modules/function-app.bicep' = {
     gatewayAuthClientIdSecretUri: '${keyVault.outputs.uri}secrets/${gatewayAuthClientIdSecretName}'
     gatewayAuthClientSecretSecretUri: '${keyVault.outputs.uri}secrets/${gatewayAuthClientSecretSecretName}'
     gatewayBaseAddress: 'https://${gatewayMock.outputs.defaultHostName}'
+    deadLetterQueueServiceUri: storage.outputs.queueServiceUri
   }
   dependsOn: [
     monitoring
