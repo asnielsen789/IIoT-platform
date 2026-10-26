@@ -32,6 +32,16 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!--
+      The Function's host.json, linked rather than copied, so the test that compares its queue
+      schedule with the code's reads the file that is deployed.
+    -->
+    <Content Include="..\..\src\IIoT.Functions\host.json"
+      Link="Fixtures\Functions\host.json"
+      CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\..\src\IIoT.Core\IIoT.Core.csproj" />
     <ProjectReference Include="..\..\src\IIoT.Functions\IIoT.Functions.csproj" />
     <ProjectReference Include="..\..\tools\IIoT.GatewayMock\IIoT.GatewayMock.csproj" />

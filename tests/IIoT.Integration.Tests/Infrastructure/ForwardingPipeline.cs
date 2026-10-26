@@ -1,11 +1,15 @@
 using System.Collections.Concurrent;
 using System.Net;
+using Azure.Messaging.EventHubs;
 using IIoT.Core.Authentication;
 using IIoT.Core.Forwarders;
 using IIoT.Core.Services;
 using IIoT.Functions;
+using IIoT.Functions.DeadLettering;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Logging;
 
 namespace IIoT.Integration.Tests.Infrastructure;
 
@@ -18,7 +22,9 @@ namespace IIoT.Integration.Tests.Infrastructure;
 /// registers the real <see cref="TelemetryService"/>, forwarder, token provider and resilience
 /// pipeline exactly as production does; the tests then swap the two primary handlers at the bottom
 /// of those pipelines — the gateway client's for the mock's test server, the token client's for
-/// the local token endpoint — so no socket is ever opened.
+/// the local token endpoint — so no socket is ever opened. Dead-letter handling is registered the
+/// same way, by <see cref="DeadLetterServiceCollectionExtensions.AddForwardingDeadLetters"/>, with
+/// the Storage queues swapped for <see cref="DeadLetters"/>.
 /// </remarks>
 public sealed class ForwardingPipeline : IAsyncDisposable
 {
@@ -49,8 +55,10 @@ public sealed class ForwardingPipeline : IAsyncDisposable
         var configuration = new ConfigurationBuilder().AddInMemoryCollection(settings).Build();
 
         var services = new ServiceCollection();
-        services.AddLogging();
+        services.AddLogging(logging => logging.AddProvider(Logs));
         services.AddTelemetryForwarding(configuration);
+        services.AddForwardingDeadLetters(configuration);
+        services.Replace(ServiceDescriptor.Singleton<IDeadLetterQueue>(DeadLetters));
 
         services.AddHttpClient(GatewayV1Forwarder.HttpClientName)
             .ConfigurePrimaryHttpMessageHandler(() => new GatewayTrafficHandler(Traffic) { InnerHandler = gateway.Server.CreateHandler() });
@@ -65,6 +73,12 @@ public sealed class ForwardingPipeline : IAsyncDisposable
     /// <summary>Every attempt the forwarder's HTTP client made, after its resilience handler.</summary>
     public GatewayTraffic Traffic { get; } = new();
 
+    /// <summary>What was written to the dead-letter queues.</summary>
+    public RecordingDeadLetterQueue DeadLetters { get; } = new();
+
+    /// <summary>Everything the composed services logged.</summary>
+    public CapturingLoggerProvider Logs { get; } = new();
+
     public IServiceProvider Services => _services;
 
     /// <summary>Processes one message the way one function invocation does: in its own scope.</summary>
@@ -73,6 +87,28 @@ public sealed class ForwardingPipeline : IAsyncDisposable
         await using var scope = _services.CreateAsyncScope();
         var service = scope.ServiceProvider.GetRequiredService<TelemetryService>();
         return (await service.ProcessAsync(payload, authenticatedDeviceId, enqueuedAt)).Outcome;
+    }
+
+    /// <summary>
+    /// Runs <see cref="TelemetryFunction.ProcessTelemetry"/> on <paramref name="eventData"/>, the
+    /// function created in its own scope as the worker creates it.
+    /// </summary>
+    public async Task ProcessTelemetryAsync(EventData eventData)
+    {
+        await using var scope = _services.CreateAsyncScope();
+        var function = ActivatorUtilities.CreateInstance<TelemetryFunction>(scope.ServiceProvider);
+        await function.ProcessTelemetry(eventData, new TestFunctionContext());
+    }
+
+    /// <summary>
+    /// Runs <see cref="RetryForwardingFunction.RetryForwarding"/> on <paramref name="entry"/> as its
+    /// <paramref name="attempt"/>th dequeue, the function created in its own scope.
+    /// </summary>
+    public async Task RetryForwardingAsync(string entry, long attempt)
+    {
+        await using var scope = _services.CreateAsyncScope();
+        var function = ActivatorUtilities.CreateInstance<RetryForwardingFunction>(scope.ServiceProvider);
+        await function.RetryForwarding(entry, TestFunctionContext.ForQueueAttempt(attempt));
     }
 
     public ValueTask DisposeAsync() => _services.DisposeAsync();
@@ -91,6 +127,13 @@ public sealed class GatewayTraffic
     /// request on. <c>null</c> passes it on.
     /// </summary>
     public Func<int, HttpStatusCode?> Fault { get; set; } = _ => null;
+
+    /// <summary>
+    /// Decides, per 1-based attempt number, whether the request reaches the gateway but its answer
+    /// is replaced with this status on the way back — a gateway that stored the batch and a response
+    /// the sender never saw. <c>null</c> returns the gateway's own answer.
+    /// </summary>
+    public Func<int, HttpStatusCode?> LoseResponse { get; set; } = _ => null;
 
     public int Attempts => Volatile.Read(ref _attempts);
 
@@ -121,6 +164,12 @@ internal sealed class GatewayTrafficHandler : DelegatingHandler
         var response = _traffic.Fault(attempt) is { } fault
             ? new HttpResponseMessage(fault) { RequestMessage = request }
             : await base.SendAsync(request, cancellationToken);
+
+        if (_traffic.LoseResponse(attempt) is { } lost)
+        {
+            response.Dispose();
+            response = new HttpResponseMessage(lost) { RequestMessage = request };
+        }
 
         _traffic.Responses.Enqueue(response.StatusCode);
         return response;
