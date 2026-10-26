@@ -53,8 +53,8 @@ public sealed class TelemetryFunction
         // measuredAt are not trustworthy as absolute time (section 4 of the contract).
         var enqueuedAt = eventData.EnqueuedTime;
 
-        var outcome = await _telemetryService.ProcessAsync(
-            payload, authenticatedDeviceId, enqueuedAt, context.CancellationToken);
+        var outcome = (await _telemetryService.ProcessAsync(
+            payload, authenticatedDeviceId, enqueuedAt, context.CancellationToken)).Outcome;
 
         // The message is never re-thrown on rejection. A payload that fails validation will fail
         // identically on every retry, so throwing would only block the partition until the

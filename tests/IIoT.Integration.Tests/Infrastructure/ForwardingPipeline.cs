@@ -72,7 +72,7 @@ public sealed class ForwardingPipeline : IAsyncDisposable
     {
         await using var scope = _services.CreateAsyncScope();
         var service = scope.ServiceProvider.GetRequiredService<TelemetryService>();
-        return await service.ProcessAsync(payload, authenticatedDeviceId, enqueuedAt);
+        return (await service.ProcessAsync(payload, authenticatedDeviceId, enqueuedAt)).Outcome;
     }
 
     public ValueTask DisposeAsync() => _services.DisposeAsync();

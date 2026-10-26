@@ -31,10 +31,10 @@ public class TelemetryServiceTests
     [Fact]
     public async Task ProcessAsync_MatchingIdentity_Forwards()
     {
-        var outcome = await _service.ProcessAsync(
+        var result = await _service.ProcessAsync(
             ContractFixtures.Read("valid-full.json"), AuthenticatedDevice, EnqueuedAt);
 
-        Assert.Equal(ProcessingOutcome.Forwarded, outcome);
+        Assert.Equal(ProcessingOutcome.Forwarded, result.Outcome);
         Assert.Equal("01J8F2K9QS4T7V0X3Z6B8N1M5B", Assert.Single(_forwarder.Forwarded).Message.MessageId);
     }
 
@@ -61,10 +61,10 @@ public class TelemetryServiceTests
     [Fact]
     public async Task ProcessAsync_NoDeviceIdInBody_Forwards()
     {
-        var outcome = await _service.ProcessAsync(
+        var result = await _service.ProcessAsync(
             ContractFixtures.Read("valid-minimal.json"), AuthenticatedDevice, EnqueuedAt);
 
-        Assert.Equal(ProcessingOutcome.Forwarded, outcome);
+        Assert.Equal(ProcessingOutcome.Forwarded, result.Outcome);
         Assert.Single(_forwarder.Forwarded);
     }
 
@@ -91,10 +91,10 @@ public class TelemetryServiceTests
     [Fact]
     public async Task ProcessAsync_DeviceIdMismatch_IsRejectedAndNotForwarded()
     {
-        var outcome = await _service.ProcessAsync(
+        var result = await _service.ProcessAsync(
             ContractFixtures.Read("valid-full.json"), "tank-000999", EnqueuedAt);
 
-        Assert.Equal(ProcessingOutcome.RejectedIdentityMismatch, outcome);
+        Assert.Equal(ProcessingOutcome.RejectedIdentityMismatch, result.Outcome);
         Assert.Empty(_forwarder.Forwarded);
     }
 
@@ -105,10 +105,10 @@ public class TelemetryServiceTests
     [Fact]
     public async Task ProcessAsync_DeviceIdDiffersOnlyInCase_IsRejected()
     {
-        var outcome = await _service.ProcessAsync(
+        var result = await _service.ProcessAsync(
             ContractFixtures.Read("valid-full.json"), "TANK-000123", EnqueuedAt);
 
-        Assert.Equal(ProcessingOutcome.RejectedIdentityMismatch, outcome);
+        Assert.Equal(ProcessingOutcome.RejectedIdentityMismatch, result.Outcome);
         Assert.Empty(_forwarder.Forwarded);
     }
 
@@ -118,10 +118,10 @@ public class TelemetryServiceTests
     [InlineData("   ")]
     public async Task ProcessAsync_NoAuthenticatedIdentity_IsRejected(string? authenticatedDeviceId)
     {
-        var outcome = await _service.ProcessAsync(
+        var result = await _service.ProcessAsync(
             ContractFixtures.Read("valid-minimal.json"), authenticatedDeviceId, EnqueuedAt);
 
-        Assert.Equal(ProcessingOutcome.RejectedUnknownIdentity, outcome);
+        Assert.Equal(ProcessingOutcome.RejectedUnknownIdentity, result.Outcome);
         Assert.Empty(_forwarder.Forwarded);
     }
 
@@ -129,10 +129,10 @@ public class TelemetryServiceTests
     [MemberData(nameof(ContractFixtures.Invalid), MemberType = typeof(ContractFixtures))]
     public async Task ProcessAsync_InvalidPayload_IsNotForwarded(string fileName)
     {
-        var outcome = await _service.ProcessAsync(
+        var result = await _service.ProcessAsync(
             ContractFixtures.Read(fileName), AuthenticatedDevice, EnqueuedAt);
 
-        Assert.Equal(ProcessingOutcome.RejectedInvalidPayload, outcome);
+        Assert.Equal(ProcessingOutcome.RejectedInvalidPayload, result.Outcome);
         Assert.Empty(_forwarder.Forwarded);
     }
 
@@ -144,10 +144,10 @@ public class TelemetryServiceTests
     [Fact]
     public async Task ProcessAsync_BufferedBackfill_ForwardsTheWholeBatch()
     {
-        var outcome = await _service.ProcessAsync(
+        var result = await _service.ProcessAsync(
             ContractFixtures.Read("valid-buffered-backfill.json"), AuthenticatedDevice, EnqueuedAt);
 
-        Assert.Equal(ProcessingOutcome.Forwarded, outcome);
+        Assert.Equal(ProcessingOutcome.Forwarded, result.Outcome);
 
         var forwarded = Assert.Single(_forwarder.Forwarded);
         Assert.Equal(3, forwarded.Message.Measurements.Count);
@@ -169,9 +169,9 @@ public class TelemetryServiceTests
             sentAt: "2017-01-01t00:00:05z",
             measuredAt: "2016-12-31T23:59:60Z");
 
-        var outcome = await _service.ProcessAsync(payload, AuthenticatedDevice, EnqueuedAt);
+        var result = await _service.ProcessAsync(payload, AuthenticatedDevice, EnqueuedAt);
 
-        Assert.Equal(ProcessingOutcome.Forwarded, outcome);
+        Assert.Equal(ProcessingOutcome.Forwarded, result.Outcome);
         var forwarded = Assert.Single(_forwarder.Forwarded).Message;
         Assert.Equal(4294967295L, forwarded.Sequence);
         Assert.Equal(new DateTimeOffset(2017, 1, 1, 0, 0, 5, TimeSpan.Zero), forwarded.SentAt);
@@ -188,10 +188,10 @@ public class TelemetryServiceTests
         var logger = new CapturingLogger<TelemetryService>();
         var service = new TelemetryService(_forwarder, logger);
 
-        var outcome = await service.ProcessAsync(
+        var result = await service.ProcessAsync(
             InlinePayload.Telemetry(measuredAt: "2026-09-14T06:00:10+23:59"), AuthenticatedDevice, EnqueuedAt);
 
-        Assert.Equal(ProcessingOutcome.RejectedInvalidPayload, outcome);
+        Assert.Equal(ProcessingOutcome.RejectedInvalidPayload, result.Outcome);
         Assert.Empty(_forwarder.Forwarded);
 
         var warning = Assert.Single(logger.Entries, entry => entry.Level == LogLevel.Warning);
@@ -205,9 +205,9 @@ public class TelemetryServiceTests
     [Fact]
     public async Task ProcessAsync_MalformedPayload_IsRejectedWithoutThrowing()
     {
-        var outcome = await _service.ProcessAsync("{ not json", AuthenticatedDevice, EnqueuedAt);
+        var result = await _service.ProcessAsync("{ not json", AuthenticatedDevice, EnqueuedAt);
 
-        Assert.Equal(ProcessingOutcome.RejectedInvalidPayload, outcome);
+        Assert.Equal(ProcessingOutcome.RejectedInvalidPayload, result.Outcome);
         Assert.Empty(_forwarder.Forwarded);
     }
 
@@ -221,9 +221,9 @@ public class TelemetryServiceTests
 
     /// <summary>
     /// Whatever made forwarding fail, the outcome says so and the service does not throw —
-    /// consistent with how rejections are handled. The log line is the only record of the
-    /// message until dead-lettering exists, so it must carry the message id, the authenticated
-    /// device and the reason.
+    /// consistent with how rejections are handled. The log line must carry the message id, the
+    /// authenticated device and the reason: if dead-lettering fails as well, it is the only record.
+    /// The result carries the reason too, for the dead-letter entry (ADR-010).
     /// </summary>
     [Theory]
     [MemberData(nameof(ForwardingFailures))]
@@ -240,10 +240,12 @@ public class TelemetryServiceTests
             _ => throw new ArgumentOutOfRangeException(nameof(failure))
         };
 
-        var outcome = await service.ProcessAsync(
+        var result = await service.ProcessAsync(
             ContractFixtures.Read("valid-minimal.json"), AuthenticatedDevice, EnqueuedAt);
 
-        Assert.Equal(ProcessingOutcome.ForwardingFailed, outcome);
+        Assert.Equal(ProcessingOutcome.ForwardingFailed, result.Outcome);
+        Assert.Equal("01J8F2K9QS4T7V0X3Z6B8N1M5A", result.MessageId);
+        Assert.Equal(_forwarder.FailWith.Message, result.FailureReason);
         Assert.Single(_forwarder.Forwarded);
 
         var error = Assert.Single(logger.Entries, entry => entry.Level == LogLevel.Error);
@@ -277,10 +279,64 @@ public class TelemetryServiceTests
     {
         _forwarder.FailWith = new ForwardingException("should never be reached");
 
-        var outcome = await _service.ProcessAsync(
+        var result = await _service.ProcessAsync(
             ContractFixtures.Read("valid-full.json"), "tank-000999", EnqueuedAt);
 
-        Assert.Equal(ProcessingOutcome.RejectedIdentityMismatch, outcome);
+        Assert.Equal(ProcessingOutcome.RejectedIdentityMismatch, result.Outcome);
         Assert.Empty(_forwarder.Forwarded);
+    }
+
+    /// <summary>
+    /// The gateway's final status travels with the failure, so a dead-letter entry can say whether
+    /// the gateway refused the batch or never answered.
+    /// </summary>
+    [Theory]
+    [InlineData(HttpStatusCode.ServiceUnavailable)]
+    [InlineData(HttpStatusCode.BadRequest)]
+    [InlineData(HttpStatusCode.Unauthorized)]
+    public async Task ProcessAsync_GatewayRefuses_TheResultCarriesItsStatusCode(HttpStatusCode status)
+    {
+        _forwarder.FailWith = new ForwardingException($"Gateway v1 responded {(int)status} {status}") { StatusCode = status };
+
+        var result = await _service.ProcessAsync(ContractFixtures.Read("valid-full.json"), AuthenticatedDevice, EnqueuedAt);
+
+        Assert.Equal(ProcessingOutcome.ForwardingFailed, result.Outcome);
+        Assert.Equal((int)status, result.StatusCode);
+    }
+
+    /// <summary>A failure that never reached the gateway has no status code to report.</summary>
+    [Fact]
+    public async Task ProcessAsync_GatewayUnreachable_TheResultHasNoStatusCode()
+    {
+        _forwarder.FailWith = new HttpRequestException("Connection refused (gateway.iiot.test:443)");
+
+        var result = await _service.ProcessAsync(ContractFixtures.Read("valid-full.json"), AuthenticatedDevice, EnqueuedAt);
+
+        Assert.Equal(ProcessingOutcome.ForwardingFailed, result.Outcome);
+        Assert.Null(result.StatusCode);
+        Assert.Equal("Connection refused (gateway.iiot.test:443)", result.FailureReason);
+    }
+
+    /// <summary>
+    /// A delivered message and a rejection after validation both name the message, so a caller can
+    /// log what it decided about; neither carries a failure.
+    /// </summary>
+    [Fact]
+    public async Task ProcessAsync_ValidatedMessages_TheResultCarriesTheMessageId()
+    {
+        var forwarded = await _service.ProcessAsync(ContractFixtures.Read("valid-full.json"), AuthenticatedDevice, EnqueuedAt);
+        var mismatch = await _service.ProcessAsync(ContractFixtures.Read("valid-full.json"), "tank-000999", EnqueuedAt);
+
+        Assert.Equal(new ProcessingResult(ProcessingOutcome.Forwarded, "01J8F2K9QS4T7V0X3Z6B8N1M5B"), forwarded);
+        Assert.Equal(new ProcessingResult(ProcessingOutcome.RejectedIdentityMismatch, "01J8F2K9QS4T7V0X3Z6B8N1M5B"), mismatch);
+    }
+
+    /// <summary>A payload that could not be read has no message id to report.</summary>
+    [Fact]
+    public async Task ProcessAsync_InvalidPayload_TheResultHasNoMessageId()
+    {
+        var result = await _service.ProcessAsync("{ not json", AuthenticatedDevice, EnqueuedAt);
+
+        Assert.Equal(new ProcessingResult(ProcessingOutcome.RejectedInvalidPayload), result);
     }
 }
