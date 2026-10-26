@@ -728,14 +728,18 @@ TOKEN=$(curl -s https://<tenant domain>/oauth/token \
 
 BODY=docs/schemas/gateway/examples/valid-single-reading.json
 KEY=$(grep -o '"messageId": *"[^"]*"' "$BODY" | cut -d'"' -f4)
-curl -s -o /dev/null -w "%{http_code}\n" https://localhost:7180/v1/readings \
+CURL_SSL_BACKEND=schannel curl -s -o /dev/null -w "%{http_code}\n" https://localhost:7180/v1/readings \
   -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
   -H "Idempotency-Key: $KEY" --data-binary @"$BODY"
 unset TOKEN
 ```
 
-The commands need nothing beyond Git Bash: `grep` and `cut` read the JSON, since `jq` is not part
-of it.
+The commands need nothing beyond Git Bash:
+- **`grep` and `cut` read the JSON**, since `jq` is not part of Git Bash.
+- **`CURL_SSL_BACKEND=schannel`** makes Git Bash's `curl` verify the mock's certificate against the
+  Windows certificate store, which holds the trusted ASP.NET Core development certificate
+  (`dotnet dev-certs https --trust`). Its default backend, OpenSSL, has its own CA bundle without
+  that certificate and fails with exit code 60.
 
 It worked when the mock answers `202`, and `401` without the `Authorization` header. The token is
 a credential for as long as it lives: do not paste it anywhere, including into a token decoder
