@@ -1,3 +1,4 @@
+using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Authentication.OpenIdConnect;
 using Microsoft.Extensions.Options;
@@ -123,8 +124,7 @@ internal sealed class ConfigureDashboardOpenIdConnectOptions : IConfigureNamedOp
         // The provider has no need to learn which library and version signs people in here.
         options.DisableTelemetry = true;
 
-        // The session needs nothing from the tokens once the user is signed in. Not saving them
-        // keeps the ID token and the access token out of the cookie.
+        // Not every token the provider returns is kept: see OnTokenValidated below.
         options.SaveTokens = false;
 
         // Keep claim names as the provider sends them (sub, name), as for the bearer scheme.
@@ -135,10 +135,26 @@ internal sealed class ConfigureDashboardOpenIdConnectOptions : IConfigureNamedOp
         // the client secret as the key; that would make the secret a signing key as well.
         options.TokenValidationParameters.ValidAlgorithms = [SecurityAlgorithms.RsaSha256];
 
-        // Sign-out ends the provider's session too (OpenID Connect RP-Initiated Logout). With no
-        // ID token saved there is no id_token_hint to send, so the request identifies the client
-        // by client_id, which the specification allows and which a provider needs before it will
-        // redirect back to the post-logout URI.
+        // The session keeps the ID token and nothing else, for one purpose: sign-out, below. The
+        // access token is not kept, since the page calls no API with it. The ID token is no
+        // credential for any API either — its audience is this client — and the cookie that holds
+        // it is encrypted and out of reach of script.
+        options.Events.OnTokenValidated = context =>
+        {
+            if (context.TokenEndpointResponse?.IdToken is { Length: > 0 } idToken)
+            {
+                context.Properties!.StoreTokens(
+                    [new AuthenticationToken { Name = OpenIdConnectParameterNames.IdToken, Value = idToken }]);
+            }
+
+            return Task.CompletedTask;
+        };
+
+        // Sign-out ends the provider's session too (OpenID Connect RP-Initiated Logout). The handler
+        // sends the kept ID token as id_token_hint, which tells the provider whose session to end
+        // and lets it return to the post-logout URI without asking the user to confirm. client_id
+        // is added as well, which the specification allows: it names the application whose
+        // allowed logout URLs that URI is checked against.
         options.Events.OnRedirectToIdentityProviderForSignOut = context =>
         {
             context.ProtocolMessage.ClientId = context.Options.ClientId;

@@ -208,8 +208,9 @@ public class GatewayMockDashboardTests : IClassFixture<DashboardFixture>
     }
 
     /// <summary>
-    /// Sign-out ends the session here and at the provider, with the client identified and an
-    /// HTTPS address to come back to; afterwards the dashboard asks for a new sign-in.
+    /// Sign-out ends the session here and at the provider — identifying the user's session with
+    /// the ID token it kept, and the client, and giving an HTTPS address to come back to —
+    /// and afterwards the dashboard asks for a new sign-in.
     /// </summary>
     [Fact]
     public async Task SignOut_EndsTheSessionHereAndAtTheProvider()
@@ -230,7 +231,7 @@ public class GatewayMockDashboardTests : IClassFixture<DashboardFixture>
                 "https://localhost" + DashboardFixture.SignedOutCallbackPath,
                 HttpUtility.ParseQueryString(logout.Query)["post_logout_redirect_uri"]);
 
-            using var back = await browser.GetAsync(_dashboard.Provider.EndSession(logout));
+            using var back = await browser.GetAsync(await _dashboard.Provider.EndSessionAsync(logout));
             Assert.Equal(HttpStatusCode.Redirect, back.StatusCode);
             Assert.Equal(DashboardFixture.DashboardPath, back.Headers.Location?.OriginalString);
 

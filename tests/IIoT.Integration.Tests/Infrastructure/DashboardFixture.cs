@@ -81,7 +81,7 @@ public sealed class DashboardFixture : IDisposable
     /// <summary>
     /// Opens the dashboard in a new browser and signs in through the provider, as a person would.
     /// </summary>
-    /// <returns>The signed-in browser, and the session cookie it was given, as a <c>Cookie</c> header value.</returns>
+    /// <returns>The signed-in browser, and the session cookie it was given as a <c>Cookie</c> header value.</returns>
     public async Task<(HttpClient Browser, string SessionCookie)> SignInAsync(string userName = TestOidcProvider.DefaultUserName)
     {
         var browser = CreateBrowser();
@@ -96,11 +96,14 @@ public sealed class DashboardFixture : IDisposable
         Assert.Equal(HttpStatusCode.Redirect, callback.StatusCode);
         Assert.Equal(DashboardPath, callback.Headers.Location?.OriginalString);
 
-        var sessionCookie = Assert.Single(
-            callback.Headers.GetValues("Set-Cookie"),
-            cookie => cookie.StartsWith(SessionCookieName + "=", StringComparison.Ordinal));
+        // The cookie and, should the ticket ever outgrow one cookie, its chunks (nameC1, nameC2).
+        var session = callback.Headers.GetValues("Set-Cookie")
+            .Where(cookie => cookie.StartsWith(SessionCookieName, StringComparison.Ordinal))
+            .Select(cookie => cookie.Split(';')[0])
+            .ToList();
+        Assert.NotEmpty(session);
 
-        return (browser, sessionCookie.Split(';')[0]);
+        return (browser, string.Join("; ", session));
     }
 
     public void Dispose()

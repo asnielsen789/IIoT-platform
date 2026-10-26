@@ -97,15 +97,26 @@ public sealed class TestOidcProvider : IDisposable
     }
 
     /// <summary>
-    /// Plays the provider's end-session endpoint: checks the logout request and returns where the
-    /// provider sends the browser afterwards.
+    /// Plays the provider's end-session endpoint: checks the logout request — including that its
+    /// <c>id_token_hint</c> is an ID token this provider issued to this client — and returns where
+    /// the provider sends the browser afterwards.
     /// </summary>
-    public Uri EndSession(Uri logoutRequest)
+    public async Task<Uri> EndSessionAsync(Uri logoutRequest)
     {
         Assert.Equal(EndSessionEndpoint, logoutRequest.GetLeftPart(UriPartial.Path));
 
         var query = HttpUtility.ParseQueryString(logoutRequest.Query);
         Assert.Equal(ClientId, query["client_id"]);
+
+        var hint = await new JsonWebTokenHandler().ValidateTokenAsync(Required(query, "id_token_hint"), new TokenValidationParameters
+        {
+            ValidIssuer = Authority,
+            ValidAudience = ClientId,
+            IssuerSigningKey = SigningKey,
+            ValidAlgorithms = [SecurityAlgorithms.RsaSha256]
+        });
+        Assert.True(hint.IsValid, $"id_token_hint is not an ID token this provider issued: {hint.Exception?.Message}");
+        Assert.Equal(Subject, hint.Claims["sub"]);
 
         var postLogoutRedirectUri = Required(query, "post_logout_redirect_uri");
         var state = Required(query, "state");
