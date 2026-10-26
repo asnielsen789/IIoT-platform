@@ -66,3 +66,6 @@ output name string = keyVault.name
 
 @description('Resource ID of the vault.')
 output id string = keyVault.id
+
+@description('URI of the vault, ending in a slash, for building the URIs of secrets that Key Vault references point at.')
+output uri string = keyVault.properties.vaultUri
