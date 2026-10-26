@@ -55,6 +55,9 @@ param gatewayAuthClientIdSecretUri string
 @description('Versionless URI of the Key Vault secret holding the gateway OAuth client secret.')
 param gatewayAuthClientSecretSecretUri string
 
+@description('Base address of the downstream gateway (GatewayV1:BaseAddress). HTTPS: the forwarder refuses anything else.')
+param gatewayBaseAddress string
+
 @description('Upper bound on on-demand instances. Caps runaway cost and the share of the regional Flex Consumption core quota the app can take.')
 @minValue(1)
 @maxValue(1000)
@@ -183,6 +186,13 @@ resource functionApp 'Microsoft.Web/sites@2025-03-01' = {
         {
           name: 'GatewayAuth__ClientSecret'
           value: '@Microsoft.KeyVault(SecretUri=${gatewayAuthClientSecretSecretUri})'
+        }
+        // Where the forwarder sends readings (#15): {GatewayV1:BaseAddress}/v1/readings. Without
+        // it, every message ends as ForwardingFailed with "BaseAddress is not configured", and
+        // no token is ever fetched, since the address is checked first.
+        {
+          name: 'GatewayV1__BaseAddress'
+          value: gatewayBaseAddress
         }
       ]
     }

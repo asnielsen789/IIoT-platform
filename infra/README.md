@@ -25,6 +25,7 @@ the Function App on a Flex Consumption plan with its storage account, and monito
 | `modules/iot-hub.bicep` | IoT Hub: shared access policies, message routing, the Function's consumer group, resource logs |
 | `modules/iot-hub-connection-secret.bicep` | Builds the Function's IoT Hub connection string and writes it to Key Vault |
 | `modules/function-app.bicep` | Flex Consumption plan and Function App |
+| `modules/gateway-mock.bicep` | The gateway mock on App Service (free tier), the Function's downstream gateway in staging ([Gateway mock](#gateway-mock)) |
 | `modules/github-deployment.bicep` | Managed identity the deploy workflow logs in with: its GitHub federated credential and its role on the Function App |
 
 ## Prerequisites
@@ -68,7 +69,7 @@ az deployment sub what-if \
 
 `--location` is where Azure stores the deployment record; the resources take their region from
 the parameter file. Treat what-if output as internal: do not paste it into issues, pull
-requests or commits. On a subscription where nothing is deployed yet, the plan is 22 resources
+requests or commits. On a subscription where nothing is deployed yet, the plan is 27 resources
 to create.
 
 ## Deploy
@@ -135,14 +136,16 @@ az deployment sub what-if \
   --parameters infra/environments/staging.bicepparam
 ```
 
-The first time, expect **22 resources to create**: the resource group; the IoT Hub, its consumer
+The first time, expect **27 resources to create**: the resource group; the IoT Hub, its consumer
 group `telemetry-function` and its diagnostic setting `routes-and-connections`; the Log
 Analytics workspace and Application Insights; the Key Vault with its role assignment, the
 secret `iothub-telemetry-connection` and the device CA keys `device-ca-root` and
 `device-ca-issuing`; the managed identity; the storage account with its blob
 service, container `app-package` and two role assignments; the Flex Consumption plan and the
 Function App; the deployment identity `id-iiot-staging-neu-github`, its federated credential
-`github-staging` and its role assignment on the Function App. In the IoT Hub's properties, check
+`github-staging` and its role assignment on the Function App; the gateway mock's App Service
+plan and web app, its two basic-auth publishing policies (`scm`, `ftp`) and its log settings.
+In the IoT Hub's properties, check
 `routing`: the route `telemetry-v1` with the condition `$body.schemaVersion = 1` to `events`,
 and `fallbackRoute` enabled to `events`. In the federated credential, check `subject`: it must
 end in `:environment:staging`. What-if masks the Function App's `siteConfig`, so its app
@@ -158,6 +161,9 @@ first deployment after the workspace's daily cap was added modifies the Log Anal
 the gateway credentials were added modifies the Function App's app settings, four
 `GatewayAuth__*` settings, and nothing else; write the two secrets first
 ([Service-to-service authentication (one-time)](#service-to-service-authentication-one-time)).
+The first deployment after the gateway mock was added creates its five resources and adds
+`GatewayV1__BaseAddress` to the Function App's settings; then publish the mock
+([Gateway mock](#gateway-mock)), since until then the Function forwards to an empty app.
 `what-if` does not show app settings at all, since Azure does not return them with the site, so
 that change is not in the plan; step 5 checks it afterwards. Once the CA keys exist, `what-if`
 also lists them as `Modify` with `rotationPolicy` to be deleted: noise, like the role
@@ -485,6 +491,49 @@ leave something behind:
 The deployment records at subscription scope remain; they are harmless. The deployment identity
 goes with the resource group, and the next deployment creates a new one with a new client ID:
 see [After the infrastructure is recreated](#after-the-infrastructure-is-recreated).
+
+## Gateway mock
+
+Staging has no real downstream system, so the Function forwards to the gateway mock
+([`tools/IIoT.GatewayMock`](../tools/IIoT.GatewayMock/README.md)) on App Service
+([#15](https://github.com/asnielsen789/IIoT-platform/issues/15)). The templates create the app
+and set the Function's `GatewayV1__BaseAddress` to it, and the mock's issuer and audience to the
+Function's identity provider. The code is published by hand, like an infrastructure change: the
+deploy workflow covers the Function only.
+
+Publish after the first infrastructure deployment that creates the app, and after any change to
+the mock. Deployment signs in with your Azure CLI session, since the app has basic-auth
+publishing turned off:
+
+```sh
+MOCK_APP=$(output gatewayMockAppName)
+OUT="$TEMP/gateway-mock" ZIP="$TEMP/gateway-mock.zip"
+rm -rf "$OUT" "$ZIP"
+dotnet publish tools/IIoT.GatewayMock -c Release -o "$OUT"
+powershell.exe -NoProfile -Command "Compress-Archive -Path '$(cygpath -w "$OUT")\*' -DestinationPath '$(cygpath -w "$ZIP")' -Force"
+az webapp deploy --resource-group "$RG" --name "$MOCK_APP" --src-path "$ZIP" --type zip
+```
+
+`Compress-Archive` builds the zip, because Git Bash has no `zip`. The deployment ends with "Site
+started successfully". Then check that the mock refuses an unauthenticated call. `401` is right:
+it means the mock is running and its JWT validation is on.
+
+```sh
+curl -s -o /dev/null -w "%{http_code}\n" "https://$MOCK_APP.azurewebsites.net/v1/readings" -X POST
+```
+
+**End to end.** Send a message as in step 7 of [Deploy](#deploy). The Function's log then shows
+`Delivered message … to gateway v1 (202)`, and its dependencies show the token request to the
+identity provider (`POST /oauth/token`, `200`) and the call to the mock
+(`POST /v1/readings`, `202`). The mock logs `Accepted message <messageId> from <device> …,
+delivered by <client-id>@clients`, which you can follow with:
+
+```sh
+az webapp log tail --resource-group "$RG" --name "$MOCK_APP"
+```
+
+The mock keeps what it accepts in memory, so a restart, or the app unloading when idle, empties
+it.
 
 ## Continuous deployment
 
@@ -1007,6 +1056,8 @@ environment name, so it is stable across redeployments and differs between subsc
 | IoT Hub | `iot-iiot-staging-neu-xxxx` |
 | Flex Consumption plan | `asp-iiot-staging-neu` |
 | Function App | `func-iiot-staging-neu-xxxx` |
+| Gateway mock's App Service plan | `asp-iiot-staging-sdc-gateway-mock` (in Sweden Central: [Gateway mock](#gateway-mock-1)) |
+| Gateway mock | `app-iiot-staging-sdc-gateway-mock-xxxx` |
 
 Key Vault names are limited to 24 characters, which is why the environment name is limited to
 seven. The deploy workflow's identity takes the qualifier `-github` after the usual name, which
@@ -1021,6 +1072,9 @@ West Europe offers everything this platform needs, but Azure currently closes it
 have no resources there yet ([region access policy](https://learn.microsoft.com/azure/azure-resource-manager/troubleshooting/error-region-access-policy)):
 a what-if there fails with `RequestDisallowedByAzure`. Sweden Central does not offer IoT Hub.
 North Europe offers IoT Hub and Flex Consumption with .NET 10, and keeps the platform in the EU.
+
+The one exception is the gateway mock, which runs in Sweden Central (`gatewayMockLocation`); see
+[Gateway mock](#gateway-mock-1) under these design notes.
 
 ### Hosting: Flex Consumption
 
@@ -1210,6 +1264,36 @@ Application Insights is affected too, since its data goes to this workspace. An 
 that needs more, such as the scale test
 ([#20](https://github.com/asnielsen789/IIoT-platform/issues/20)), raises the parameter for its
 duration.
+
+### Gateway mock
+
+The Function's downstream gateway in staging, so that a message can be followed from the device
+to a receiver ([#15](https://github.com/asnielsen789/IIoT-platform/issues/15)). It is a mock, not
+a gateway: it checks the bearer token and the readings contract, and keeps what it accepts in
+memory. An operator with a real downstream system drops the module and points
+`GatewayV1__BaseAddress` at that system instead.
+
+- **App Service, free tier (F1), Linux.** It costs nothing, serves HTTPS on its
+  `azurewebsites.net` name with a platform certificate, and has the .NET 10 runtime built in, so
+  the mock deploys as plain `dotnet publish` output. F1 has no Always On: the app unloads when
+  idle, and the first request afterwards waits for it to start. The Function's retries cover that.
+  It also has a daily CPU quota of 60 minutes, far more than a mock receiving a message every few
+  hours uses.
+- **Sweden Central, not North Europe.** On 2026-10-26 this subscription's App Service quota for
+  F1 was 0 in North Europe, Germany West Central and UK South, and the deployment's preflight
+  failed with `SubscriptionIsOverQuotaForSku`; Sweden Central and France Central had quota. The
+  mock is a separate component, so only the Function's calls to it cross regions, and it stays
+  in the EU. Its names carry its own region (`sdc`). To bring it to North Europe once quota
+  exists there (Quotas in the portal, App Service), set `gatewayMockLocation` to `northeurope`:
+  the names change, so the next deployment creates a new app; publish to it and delete the old
+  plan and app. A plan's quota can be checked without creating anything by validating a minimal
+  template with `az deployment group validate`.
+- **No Azure access.** No managed identity, no Key Vault, no role assignment: its configuration
+  is the issuer and the audience it accepts tokens for, both public.
+- **Basic-auth publishing off** (`scm` and `ftp`), so no publishing password exists to leak;
+  `az webapp deploy` uses Microsoft Entra ID. HTTPS only, TLS 1.2 minimum, FTP disabled.
+- **Its log stays on the app** (file system, three days), for `az webapp log tail`. Nothing goes
+  to Application Insights, so the mock adds nothing to the workspace's ingestion or its daily cap.
 
 ## What the first deployment confirmed
 

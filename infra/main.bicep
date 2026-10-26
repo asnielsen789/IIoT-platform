@@ -38,6 +38,16 @@ param gatewayAuthTokenEndpoint string
 @description('Audience the gateway\'s access token is requested for: the identifier of the gateway API at the identity provider, which the gateway checks in the `aud` claim. Not a secret.')
 param gatewayAuthAudience string
 
+@description('Issuer of the Function\'s access tokens, exactly as in their `iss` claim (for Auth0, `https://<tenant domain>/`, with the trailing slash). The hosted gateway mock accepts tokens from this issuer only (#15). Not a secret.')
+param gatewayAuthIssuer string
+
+@description('Region of the hosted gateway mock (#15). A separate component, so it may sit in another region than the platform: App Service quota for the free tier differs by region and subscription.')
+@allowed([
+  'northeurope'
+  'swedencentral'
+])
+param gatewayMockLocation string = location
+
 @description('GitHub OIDC subject prefix of the repository whose workflows deploy the Function\'s code (#5), exactly as GitHub reports it: `gh api repos/OWNER/REPO/actions/oidc/customization/sub --jq .sub_claim_prefix`. Repositories created after 15 July 2026 use the immutable form `repo:OWNER@OWNER-ID/REPO@REPO-ID`, older ones `repo:OWNER/REPO`.')
 @minLength(6)
 param githubOidcSubjectPrefix string
@@ -54,6 +64,15 @@ var regionAbbreviations = {
 
 // <workload>-<environment>-<region>, for example iiot-staging-neu.
 var nameStem = toLower('${workload}-${environmentName}-${regionAbbreviations[location]}')
+
+// The hosted gateway mock may sit in another region than the platform (gatewayMockLocation), and
+// its names say where it is. For the mock only: a region listed here is not thereby one the
+// platform can run in, which needs IoT Hub and Flex Consumption (regionAbbreviations above).
+var gatewayMockRegionAbbreviations = {
+  northeurope: 'neu'
+  swedencentral: 'sdc'
+}
+var gatewayMockNameStem = toLower('${workload}-${environmentName}-${gatewayMockRegionAbbreviations[gatewayMockLocation]}')
 
 // Four of the resources have globally unique DNS names (IoT Hub, Function App, Key Vault,
 // storage account). They get a short suffix that is deterministic per subscription and
@@ -75,6 +94,8 @@ var names = {
   iotHub: 'iot-${nameStem}-${uniqueSuffix}'
   functionPlan: 'asp-${nameStem}'
   functionApp: 'func-${nameStem}-${uniqueSuffix}'
+  gatewayMockPlan: 'asp-${gatewayMockNameStem}-gateway-mock'
+  gatewayMockApp: 'app-${gatewayMockNameStem}-gateway-mock-${uniqueSuffix}'
 }
 
 var tags = {
@@ -207,6 +228,22 @@ module iotHubConnectionSecret 'modules/iot-hub-connection-secret.bicep' = {
   ]
 }
 
+// The downstream gateway mock, hosted so that the Function has a gateway to forward to (#15).
+// Staging has no real downstream system; an operator with one would drop this module and set
+// GatewayV1__BaseAddress to the real gateway instead. It accepts the tokens the Function gets:
+// the same issuer, the same audience.
+module gatewayMock 'modules/gateway-mock.bicep' = {
+  scope: rg
+  params: {
+    planName: names.gatewayMockPlan
+    name: names.gatewayMockApp
+    location: gatewayMockLocation
+    tags: tags
+    jwtIssuer: gatewayAuthIssuer
+    jwtAudience: gatewayAuthAudience
+  }
+}
+
 // Created after everything it uses; only the deploy workflow's identity, whose role is on the
 // app, comes later. Through the module outputs it consumes and the explicit dependency on
 // monitoring, the app comes into being only after its identity, its role assignments (in the
@@ -232,6 +269,7 @@ module functionApp 'modules/function-app.bicep' = {
     gatewayAuthAudience: gatewayAuthAudience
     gatewayAuthClientIdSecretUri: '${keyVault.outputs.uri}secrets/${gatewayAuthClientIdSecretName}'
     gatewayAuthClientSecretSecretUri: '${keyVault.outputs.uri}secrets/${gatewayAuthClientSecretSecretName}'
+    gatewayBaseAddress: 'https://${gatewayMock.outputs.defaultHostName}'
   }
   dependsOn: [
     monitoring
@@ -277,6 +315,9 @@ output storageAccountName string = storage.outputs.name
 
 @description('Application Insights name.')
 output applicationInsightsName string = monitoring.outputs.applicationInsightsName
+
+@description('Gateway mock web app name, for deploying the mock and tailing its log.')
+output gatewayMockAppName string = gatewayMock.outputs.name
 
 @description('Client ID of the identity the deploy workflow logs in with: the value of the GitHub environment variable AZURE_CLIENT_ID. An identifier, not a secret.')
 output githubDeploymentClientId string = githubDeployment.outputs.clientId
