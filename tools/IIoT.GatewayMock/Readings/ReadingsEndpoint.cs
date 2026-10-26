@@ -1,5 +1,6 @@
 using System.Security.Claims;
 using System.Text.Json;
+using IIoT.GatewayMock.Authentication;
 
 namespace IIoT.GatewayMock.Readings;
 
@@ -13,9 +14,10 @@ internal static class ReadingsEndpoint
     public const string IdempotencyKeyHeader = "Idempotency-Key";
 
     public static RouteHandlerBuilder MapReadings(this IEndpointRouteBuilder endpoints) =>
-        // The fallback policy already requires an authenticated caller for every endpoint; this
-        // says so again at the endpoint, where a reader looks first.
-        endpoints.MapPost(Route, AcceptAsync).RequireAuthorization();
+        // The fallback policy already requires a bearer-authenticated caller for every endpoint;
+        // this says so again at the endpoint, where a reader looks first. Only the bearer scheme:
+        // a dashboard session cookie never authenticates a delivery (see ApiAuthorization).
+        endpoints.MapPost(Route, AcceptAsync).RequireAuthorization(ApiAuthorization.Policy);
 
     /// <remarks>
     /// The order of the checks follows what each one needs. Authentication has already happened

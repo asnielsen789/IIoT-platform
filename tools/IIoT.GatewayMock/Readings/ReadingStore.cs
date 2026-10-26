@@ -5,7 +5,7 @@ namespace IIoT.GatewayMock.Readings;
 
 /// <summary>
 /// The batches the mock has accepted, in memory. Public so that in-process tests can see exactly
-/// what arrived without the mock needing an inspection endpoint.
+/// what arrived; the dashboard, when it is enabled, shows the same batches to people.
 /// </summary>
 /// <remarks>
 /// <para>

@@ -9,6 +9,8 @@
   <ItemGroup>
     <PackageReference Include="JsonSchema.Net" Version="9.5.0" />
     <PackageReference Include="Microsoft.AspNetCore.Authentication.JwtBearer" Version="10.0.14" />
+    <!-- The dashboard's sign-in (GatewayMock:Dashboard). Not part of the shared framework. -->
+    <PackageReference Include="Microsoft.AspNetCore.Authentication.OpenIdConnect" Version="10.0.14" />
   </ItemGroup>
 
   <ItemGroup>

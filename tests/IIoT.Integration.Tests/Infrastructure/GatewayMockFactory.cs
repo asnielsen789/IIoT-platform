@@ -4,7 +4,7 @@ using System.Text.Json.Nodes;
 using IIoT.GatewayMock.Readings;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
-using Microsoft.Extensions.Configuration;
+using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace IIoT.Integration.Tests.Infrastructure;
@@ -20,17 +20,43 @@ namespace IIoT.Integration.Tests.Infrastructure;
 public sealed class GatewayMockFactory : WebApplicationFactory<ReadingStore>
 {
     private readonly IReadOnlyDictionary<string, string?> _settings;
+    private readonly Action<IServiceCollection>? _configureServices;
 
-    public GatewayMockFactory(IReadOnlyDictionary<string, string?> settings)
+    /// <param name="settings">The mock's configuration.</param>
+    /// <param name="configureServices">
+    /// Replaces services after the mock has registered its own, for what a test must stand in for —
+    /// the identity provider's network endpoints, for example.
+    /// </param>
+    public GatewayMockFactory(
+        IReadOnlyDictionary<string, string?> settings,
+        Action<IServiceCollection>? configureServices = null)
     {
         _settings = settings;
+        _configureServices = configureServices;
     }
 
     /// <summary>What the mock has accepted so far.</summary>
     public ReadingStore Store => Services.GetRequiredService<ReadingStore>();
 
-    protected override void ConfigureWebHost(IWebHostBuilder builder) =>
-        builder.ConfigureAppConfiguration((_, configuration) => configuration.AddInMemoryCollection(_settings));
+    /// <remarks>
+    /// The settings are passed as host settings, not added as app configuration. The mock decides
+    /// whether the dashboard exists before it builds the app, by reading its configuration in
+    /// <c>Program.cs</c>. <see cref="WebApplicationFactory{TEntryPoint}"/> applies app configuration
+    /// only when the app is built, too late for that decision; host settings reach the app as
+    /// command-line arguments, from the start.
+    /// </remarks>
+    protected override void ConfigureWebHost(IWebHostBuilder builder)
+    {
+        foreach (var (key, value) in _settings)
+        {
+            builder.UseSetting(key, value);
+        }
+
+        if (_configureServices is not null)
+        {
+            builder.ConfigureTestServices(_configureServices);
+        }
+    }
 }
 
 /// <summary>Builds requests to the mock by hand, for the cases the forwarder never produces.</summary>
