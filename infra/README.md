@@ -27,6 +27,7 @@ monitoring.
 | `modules/iot-hub-connection-secret.bicep` | Builds the Function's IoT Hub connection string and writes it to Key Vault |
 | `modules/function-app.bicep` | Flex Consumption plan and Function App |
 | `modules/gateway-mock.bicep` | The gateway mock on App Service (free tier), the Function's downstream gateway in staging ([Gateway mock](#gateway-mock)) |
+| `modules/provisioning-service.bicep` | The Device Provisioning Service, linked to the IoT Hub through the hub's `dps-link` policy, for zero-touch provisioning ([Device Provisioning Service](#device-provisioning-service)) |
 | `modules/github-deployment.bicep` | Managed identity the deploy workflow logs in with: its GitHub federated credential and its role on the Function App |
 
 ## Prerequisites
@@ -70,7 +71,7 @@ az deployment sub what-if \
 
 `--location` is where Azure stores the deployment record; the resources take their region from
 the parameter file. Treat what-if output as internal: do not paste it into issues, pull
-requests or commits. On a subscription where nothing is deployed yet, the plan is 32 resources
+requests or commits. On a subscription where nothing is deployed yet, the plan is 33 resources
 to create.
 
 ## Deploy
@@ -137,7 +138,7 @@ az deployment sub what-if \
   --parameters infra/environments/staging.bicepparam
 ```
 
-The first time, expect **32 resources to create**: the resource group; the IoT Hub, its consumer
+The first time, expect **33 resources to create**: the resource group; the IoT Hub, its consumer
 group `telemetry-function` and its diagnostic setting `routes-and-connections`; the Log
 Analytics workspace and Application Insights; the Key Vault with its role assignment, the
 secret `iothub-telemetry-connection` and the device CA keys `device-ca-root` and
@@ -146,8 +147,8 @@ service, container `app-package`, queue service, queues `forwarding-failed` and
 `forwarding-failed-poison` and four role assignments, two of them on the queues; the Flex
 Consumption plan and the Function App; the deployment identity `id-iiot-staging-neu-github`, its federated credential
 `github-staging` and its role assignment on the Function App; the gateway mock's App Service
-plan and web app, its two basic-auth publishing policies (`scm`, `ftp`) and its log settings.
-In the IoT Hub's properties, check
+plan and web app, its two basic-auth publishing policies (`scm`, `ftp`) and its log settings;
+the Device Provisioning Service. In the IoT Hub's properties, check
 `routing`: the route `telemetry-v1` with the condition `$body.schemaVersion = 1` to `events`,
 and `fallbackRoute` enabled to `events`. In the federated credential, check `subject`: it must
 end in `:environment:staging`. What-if masks the Function App's `siteConfig`, so its app
@@ -171,7 +172,9 @@ queue service, the queues `forwarding-failed` and `forwarding-failed-poison` and
 role assignment on each, adds three `DeadLetterStorage__*` settings to the Function App, and
 changes nothing else ([Dead-letter queues](#dead-letter-queues)). Deploy it before the code that
 uses it reaches the app; the other way round, `RetryForwarding` stays disabled until the settings
-exist.
+exist. The first deployment after the Device Provisioning Service was added creates it, adds the
+policy `dps-link` to the IoT Hub, and changes nothing else
+([Device Provisioning Service](#device-provisioning-service)).
 `what-if` does not show app settings at all, since Azure does not return them with the site, so
 that change is not in the plan; step 5 checks it afterwards. Once the CA keys exist, `what-if`
 also lists them as `Modify` with `rotationPolicy` to be deleted: noise, like the role
@@ -1223,6 +1226,7 @@ environment name, so it is stable across redeployments and differs between subsc
 | Function App | `func-iiot-staging-neu-xxxx` |
 | Gateway mock's App Service plan | `asp-iiot-staging-sdc-gateway-mock` (in Sweden Central: [Gateway mock](#gateway-mock-1)) |
 | Gateway mock | `app-iiot-staging-sdc-gateway-mock-xxxx` |
+| Device Provisioning Service | `provs-iiot-staging-neu-xxxx` |
 
 Key Vault names are limited to 24 characters, which is why the environment name is limited to
 seven. The deploy workflow's identity takes the qualifier `-github` after the usual name, which
@@ -1521,6 +1525,34 @@ connection.
 - **Cost.** Queue operations cost US$0.004 per 10,000 in North Europe (Azure Retail Prices API,
   Queues v2, Standard LRS). The trigger polls an empty queue at most once a minute while an instance
   runs, about 43,000 operations a month, so a few US cents at most.
+
+### Device Provisioning Service
+
+Zero-touch provisioning ([#48](https://github.com/asnielsen789/IIoT-platform/issues/48)), the
+second stage of the registration decision in
+[ADR-009](../docs/adr/adr-009-device-pki.md). A device needs only the global endpoint
+`global.azure-devices-provisioning.net`, the ID scope (output `provisioningIdScope`) and its
+certificate. DPS checks the certificate against the CA in an enrollment group, creates the
+device's identity in the hub it assigns, and tells the device which hub that is.
+
+- **One tier, billed per operation.** S1 costs 0.66 DKK per 1,000 operations in North Europe
+  (Azure Retail Prices API, 2026-10-27): a registration, a status lookup, an enrollment change.
+  There is no monthly or unit fee, so an idle instance costs nothing.
+- **Linked by key, through the hub's own `dps-link` policy:** RegistryWrite and ServiceConnect,
+  the two rights DPS needs to create device identities
+  ([How to manage linked IoT hubs](https://learn.microsoft.com/azure/iot-dps/how-to-manage-linked-iot-hubs)).
+  Linking by managed identity is in preview and needs IoT Hub Data Contributor on the hub, its
+  whole data plane, so it is not used yet. The key is read with `listKeys()` during the deployment
+  and written straight into the link. It is never a parameter or an output.
+- **The link follows the key rotation.** Every deployment regenerates the hub's keys (ADR-007),
+  and the same deployment writes the new `dps-link` key into the link, since the provisioning
+  service comes after the hub. Between the two, a device that provisions gets an error and
+  retries. The hub must keep shared access policies enabled for the link to work.
+- **The classic host name.** The link's connection string names `<hub>.azure-devices.net`, which
+  devices already use. A link made in the portal or with the CLI now defaults to the TLS 1.3
+  device endpoint, `<hub>.device.azure-devices.net`, which is in preview.
+- **Allocation:** `Hashed`, DPS's default. With one linked hub it decides nothing; with more,
+  a device lands in the same hub again when it provisions again.
 
 ## What the first deployment confirmed
 
