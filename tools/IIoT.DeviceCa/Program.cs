@@ -113,8 +113,14 @@ public static class Program
                     .RunAsync(init.Force, cancellationToken);
                 break;
 
+            case IssueCommandLine { Hub: null } issue:
+                // --no-register: DPS creates the identity, so no hub is opened at all.
+                await new IssueCommand(Vault(issue.Vault, credential), registry: null, TimeProvider.System, Console.Out)
+                    .RunAsync(issue.CsrFile, issue.DeviceId, issue.OutputDirectory, cancellationToken);
+                break;
+
             case IssueCommandLine issue:
-                using (var registry = new IotHubDeviceRegistry(IotHubDeviceRegistry.ResolveHostName(issue.Hub), credential))
+                using (var registry = new IotHubDeviceRegistry(IotHubDeviceRegistry.ResolveHostName(issue.Hub!), credential))
                 {
                     await new IssueCommand(Vault(issue.Vault, credential), registry, TimeProvider.System, Console.Out)
                         .RunAsync(issue.CsrFile, issue.DeviceId, issue.OutputDirectory, cancellationToken);

@@ -49,6 +49,24 @@ public class CommandLineTests
         Assert.Null(CommandLine.Parse(["init", option]));
     }
 
+    [Fact]
+    public void Parse_Issue_WithNoRegister_HasNoHub()
+    {
+        var command = CommandLine.Parse(
+            ["issue", "--vault", "kv", "--no-register", "--csr", "tank.csr.pem", "--device-id", "tank-000003"]);
+
+        Assert.Equal(new IssueCommandLine("kv", null, "tank.csr.pem", "tank-000003", "."), command);
+    }
+
+    [Fact]
+    public void Parse_Issue_WithHubAndNoRegister_Fails()
+    {
+        var exception = Assert.Throws<CommandLineException>(() => CommandLine.Parse(
+            ["issue", "--vault", "kv", "--hub", "h", "--no-register", "--csr", "c", "--device-id", "d"]));
+
+        Assert.Contains("not both", exception.Message, StringComparison.Ordinal);
+    }
+
     [Theory]
     [InlineData(new string[0], "No command")]
     [InlineData(new[] { "sign" }, "Unknown command 'sign'")]
@@ -71,6 +89,8 @@ public class CommandLineTests
     [InlineData(new[] { "init", "--vault", "kv", "--out", "x" }, "--out")]
     [InlineData(new[] { "ca-certificate", "--vault", "kv", "--force" }, "--force")]
     [InlineData(new[] { "ca-certificate", "--vault", "kv", "--device-id", "d" }, "--device-id")]
+    [InlineData(new[] { "init", "--vault", "kv", "--no-register" }, "--no-register")]
+    [InlineData(new[] { "ca-certificate", "--vault", "kv", "--no-register" }, "--no-register")]
     public void Parse_AnOptionTheCommandDoesNotUse_Fails(string[] args, string option)
     {
         // An operator who passes --force to issue expects it to do something; silently ignoring it
@@ -85,7 +105,7 @@ public class CommandLineTests
     {
         foreach (var text in new[]
         {
-            "init", "issue", "ca-certificate", "--vault", "--hub", "--csr", "--device-id", "--out", "--force",
+            "init", "issue", "ca-certificate", "--vault", "--hub", "--csr", "--device-id", "--out", "--force", "--no-register",
             "device-ca-root-certificate", "device-ca-issuing-certificate"
         })
         {

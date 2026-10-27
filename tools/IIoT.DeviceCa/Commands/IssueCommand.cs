@@ -8,24 +8,36 @@ namespace IIoT.DeviceCa.Commands;
 
 /// <summary>
 /// <c>issue</c>: issues a device certificate for the key in a CSR, writes the certificate and its
-/// chain, and registers the device in IoT Hub as CA-authenticated.
+/// chain, and registers the device in IoT Hub as CA-authenticated, unless the device provisions
+/// itself through DPS.
 /// </summary>
 /// <remarks>
+/// <para>
 /// Checks run cheapest and least invasive first: the device ID, the CSR and the output files before
 /// the vault or the hub is asked anything, and the registry before anything is signed. A refusal
 /// therefore leaves no certificate behind and no device registered.
+/// </para>
+/// <para>
+/// Without a registry (<c>--no-register</c>), nothing is registered: the device provisions itself
+/// through the Device Provisioning Service's enrollment group for the issuing CA, which creates the
+/// identity on its first connection (#48). Its device ID then has to be a valid DPS registration ID
+/// as well, since the certificate's CN becomes both.
+/// </para>
 /// </remarks>
 public sealed class IssueCommand
 {
     private readonly ICaVault _vault;
-    private readonly IDeviceRegistry _registry;
+    private readonly IDeviceRegistry? _registry;
     private readonly TimeProvider _time;
     private readonly TextWriter _output;
 
-    public IssueCommand(ICaVault vault, IDeviceRegistry registry, TimeProvider time, TextWriter output)
+    /// <param name="vault">The CA's vault.</param>
+    /// <param name="registry">The hub to register the device in, or <see langword="null"/> when DPS registers it.</param>
+    /// <param name="time">The clock.</param>
+    /// <param name="output">Where the summary goes.</param>
+    public IssueCommand(ICaVault vault, IDeviceRegistry? registry, TimeProvider time, TextWriter output)
     {
         ArgumentNullException.ThrowIfNull(vault);
-        ArgumentNullException.ThrowIfNull(registry);
         ArgumentNullException.ThrowIfNull(time);
         ArgumentNullException.ThrowIfNull(output);
 
@@ -35,7 +47,7 @@ public sealed class IssueCommand
         _output = output;
     }
 
-    /// <summary>Issues and registers.</summary>
+    /// <summary>Issues, and registers the device unless DPS does.</summary>
     /// <param name="csrFile">The device's CSR, PEM.</param>
     /// <param name="deviceId">The IoT Hub device ID; the certificate's subject is <c>CN=&lt;deviceId&gt;</c>.</param>
     /// <param name="outputDirectory">Where the certificate and chain files go. Created if missing.</param>
@@ -53,6 +65,9 @@ public sealed class IssueCommand
         if (DeviceId.Problem(deviceId) is { } problem)
             throw new CaRefusedException($"{problem} Nothing was issued.");
 
+        if (_registry is null && RegistrationId.Problem(deviceId) is { } registrationProblem)
+            throw new CaRefusedException($"{registrationProblem} Nothing was issued.");
+
         var request = await LoadRequestAsync(csrFile, cancellationToken);
 
         var certificatePath = Path.Combine(outputDirectory, $"{FileStem(deviceId)}.cert.pem");
@@ -68,11 +83,11 @@ public sealed class IssueCommand
 
         // Never change how an existing device authenticates. Moving a device from SAS to X.509 is a
         // decision about that device, not a side effect of issuing a certificate.
-        var existing = await _registry.GetAsync(deviceId, cancellationToken);
+        var existing = _registry is null ? null : await _registry.GetAsync(deviceId, cancellationToken);
         if (existing is { IsCertificateAuthority: false })
         {
             throw new CaRefusedException(
-                $"Device '{deviceId}' is registered in {_registry.Name} with authentication type " +
+                $"Device '{deviceId}' is registered in {_registry!.Name} with authentication type " +
                 $"{existing.AuthenticationType}, not CertificateAuthority. Nothing was issued or changed. " +
                 "Use another device ID, or delete the identity first if it is really meant to move to a certificate.");
         }
@@ -97,7 +112,7 @@ public sealed class IssueCommand
         Pem.WriteNewFile(certificatePath, certificatePem);
         Pem.WriteNewFile(chainPath, certificatePem + issuing.ExportCertificatePem() + "\n");
 
-        var registered = existing is null && await RegisterAsync(deviceId, cancellationToken);
+        var registered = _registry is not null && existing is null && await RegisterAsync(_registry, deviceId, cancellationToken);
 
         var subjectNote = request.RequestedSubject.Name == certificate.Subject
             ? string.Empty
@@ -109,9 +124,12 @@ public sealed class IssueCommand
             $"{CertificateAuthority.NotAfter(certificate):u}");
         await _output.WriteLineAsync($"  {certificatePath}");
         await _output.WriteLineAsync($"  {chainPath} (device and issuing CA certificate: give this one to the device)");
-        await _output.WriteLineAsync(registered
-            ? $"Registered '{deviceId}' in {_registry.Name}, authenticated by the issuing CA."
-            : $"'{deviceId}' was already registered in {_registry.Name} as CA-authenticated; left as it is.");
+        await _output.WriteLineAsync(
+            _registry is null
+                ? $"Not registered: '{deviceId}' provisions itself through DPS, whose enrollment group for the issuing CA creates its identity."
+                : registered
+                    ? $"Registered '{deviceId}' in {_registry.Name}, authenticated by the issuing CA."
+                    : $"'{deviceId}' was already registered in {_registry.Name} as CA-authenticated; left as it is.");
 
         return new IssuedCertificate(
             certificatePath, chainPath, certificate.SerialNumber, CertificateAuthority.NotAfter(certificate), registered);
@@ -156,23 +174,23 @@ public sealed class IssueCommand
         }
     }
 
-    private async Task<bool> RegisterAsync(string deviceId, CancellationToken cancellationToken)
+    private static async Task<bool> RegisterAsync(IDeviceRegistry registry, string deviceId, CancellationToken cancellationToken)
     {
         try
         {
-            await _registry.RegisterCertificateAuthorityDeviceAsync(deviceId, cancellationToken);
+            await registry.RegisterCertificateAuthorityDeviceAsync(deviceId, cancellationToken);
             return true;
         }
         catch (DeviceAlreadyRegisteredException)
         {
             // Someone registered it in between. Fine if it is CA-authenticated; otherwise the
             // certificate just written is of no use to that identity, and the operator must know.
-            var now = await _registry.GetAsync(deviceId, cancellationToken);
+            var now = await registry.GetAsync(deviceId, cancellationToken);
             if (now is { IsCertificateAuthority: true })
                 return false;
 
             throw new CaRefusedException(
-                $"Device '{deviceId}' was registered in {_registry.Name} with authentication type " +
+                $"Device '{deviceId}' was registered in {registry.Name} with authentication type " +
                 $"{now?.AuthenticationType ?? "unknown"} while the certificate was being issued. The registry " +
                 "was not changed; the certificate files were written but cannot authenticate that identity.");
         }
@@ -184,6 +202,6 @@ public sealed class IssueCommand
 /// <param name="ChainPath">Device certificate followed by the issuing CA certificate, PEM.</param>
 /// <param name="SerialNumber">The certificate's serial number, hexadecimal.</param>
 /// <param name="NotAfter">The end of the certificate's validity.</param>
-/// <param name="Registered">True when this run registered the device; false when it was registered already.</param>
+/// <param name="Registered">True when this run registered the device; false when it was registered already, or is left to DPS.</param>
 public sealed record IssuedCertificate(
     string CertificatePath, string ChainPath, string SerialNumber, DateTimeOffset NotAfter, bool Registered);
