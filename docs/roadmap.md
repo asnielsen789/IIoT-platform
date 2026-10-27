@@ -10,7 +10,7 @@ functionality that can be demonstrated and tested.
 Aug              Sep              Oct              Nov
  |                |                |                |
  |== Setup ======|== Iteration 1 ==|== Iteration 2 ==|== Iteration 3 ==|
- |  scope,        | MQTT pipeline   | Certificates,   | C2D, observ.,   |
+ |  scope,        | MQTT pipeline   | Certificates,   | DPS, C2D, obs., |
  |  choices, IaC  | (sensor→Azure)  | auth, forwarder | hardening       |
 ```
 
@@ -63,17 +63,19 @@ Purpose: establish the project foundation so the first iteration can start clean
 
 ---
 
-## Iteration 3 — Cloud-to-device, observability & hardening (Nov 2026)
+## Iteration 3 — Provisioning, cloud-to-device, observability & hardening (Nov 2026)
 
-**Goal:** A complete platform with configuration management, monitoring and production-ready security.
+**Goal:** A complete platform with zero-touch provisioning, configuration management, monitoring and production-ready security.
 
 | Activity | Description |
 |----------|-------------|
-| Design | C2D message flow, alerting strategy, security review |
-| Implementation | Cloud-to-device configuration messages, Application Insights (logging, metrics, alerts), dead-letter handling |
+| Design | Zero-touch provisioning (a DPS enrollment group for the device CA), C2D message flow, alerting strategy, security review |
+| Implementation | Zero-touch device provisioning through DPS ([#48](https://github.com/asnielsen789/IIoT-platform/issues/48)), then cloud-to-device configuration messages ([#16](https://github.com/asnielsen789/IIoT-platform/issues/16)), Application Insights (logging, metrics, alerts), dead-letter handling ([#19](https://github.com/asnielsen789/IIoT-platform/issues/19)) |
 | Test | Scale test (simulate a large fleet), AI-assisted security review, end-to-end with hardware if available |
 
-**Demo criterion:** Full pipeline including C2D, a monitoring dashboard, and a documented security model.
+**Order:** zero-touch provisioning ([#48](https://github.com/asnielsen789/IIoT-platform/issues/48)) comes before cloud-to-device configuration ([#16](https://github.com/asnielsen789/IIoT-platform/issues/16)); decided on 2026-10-26.
+
+**Demo criterion:** Full pipeline including a device that provisions itself through DPS, C2D, a monitoring dashboard, and a documented security model.
 
 ---
 
