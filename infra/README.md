@@ -1204,6 +1204,83 @@ and they are recorded in [#11](https://github.com/asnielsen789/IIoT-platform/iss
    `az iot hub certificate list --hub-name "$IOT_HUB" --query "value[].name" -o tsv` still lists
    `device-ca-issuing`, verified, with the same thumbprint, and `tank-000002` still connects.
 
+## Zero-touch provisioning (one-time)
+
+Lets a device provision itself through the Device Provisioning Service
+([#48](https://github.com/asnielsen789/IIoT-platform/issues/48)) instead of being registered by
+`IIoT.DeviceCa issue`. The service itself comes from the templates
+([Device Provisioning Service](#device-provisioning-service)). This procedure gives it the device
+CA and an enrollment group for it, once per CA. Run it after
+[Device certificate authority (one-time)](#device-certificate-authority-one-time), in the same
+shell, signed in as the operator. `az iot dps` comes from the `azure-iot` CLI extension
+(`az extension add --name azure-iot`). First run on 2026-10-27.
+
+```sh
+DPS=$(output provisioningServiceName)
+ME=$(az ad signed-in-user show --query id -o tsv | tr -d '\r')
+DPS_ID=$(az iot dps show --resource-group "$RG" --name "$DPS" --query id -o tsv | tr -d '\r')
+```
+
+### 1. The operator's role
+
+The enrollment group lives in DPS's data plane. Manage it with your Microsoft Entra sign-in
+(`--auth-type login`) and the built-in role **Device Provisioning Service Data Contributor** on the
+instance, not with the instance's own `provisioningserviceowner` key. The role assignment needs
+`MSYS_NO_PATHCONV=1`, since its scope starts with `/subscriptions/`:
+
+```sh
+MSYS_NO_PATHCONV=1 az role assignment create --assignee-object-id "$ME" --assignee-principal-type User \
+  --role "Device Provisioning Service Data Contributor" --scope "$DPS_ID" -o none
+```
+
+### 2. Register the issuing CA certificate in DPS
+
+The same certificate, file and reasoning as for the IoT Hub in step 3 of the device CA procedure:
+DPS validates a device's certificate against the CA it signed, so the issuing CA is registered,
+not the root, and `--verified true` sets it as verified on upload. Registering a certificate is a
+control-plane operation, which Owner and Contributor include. No `MSYS_NO_PATHCONV` here: the
+path under `~` needs Git Bash's conversion.
+
+```sh
+az iot dps certificate create --dps-name "$DPS" --resource-group "$RG" \
+  --name device-ca-issuing --path ~/.secrets/iiot/device-ca-issuing.pem --verified true \
+  --query "{name:name, verified:properties.isVerified, subject:properties.subject, thumbprint:properties.thumbprint}" -o table
+```
+
+It worked when the table shows `device-ca-issuing`, `True`, `IIoT Device Issuing CA` and the same
+SHA-1 thumbprint as the IoT Hub registration.
+
+### 3. Create the enrollment group
+
+One group for the issuing CA, with X.509 CA attestation: every device whose certificate the
+issuing CA signed can provision itself. A new role assignment can take a few minutes to apply;
+until it has, the command is refused, and running it again later is enough.
+
+```sh
+az iot dps enrollment-group create --dps-name "$DPS" --resource-group "$RG" --auth-type login \
+  --enrollment-id device-ca-issuing --ca-name device-ca-issuing --provisioning-status enabled -o none
+
+az iot dps enrollment-group show --dps-name "$DPS" --resource-group "$RG" --auth-type login \
+  --enrollment-id device-ca-issuing \
+  --query "{status:provisioningStatus, attestation:attestation.type, ca:attestation.x509.caReferences.primary, reprovision:reprovisionPolicy}" -o json
+```
+
+It worked when the group is `enabled`, with attestation `x509` and CA `device-ca-issuing`.
+
+- **Allocation and hubs are left empty** (`null`), so the group inherits the instance's: `Hashed`
+  across every linked hub, which is one hub today. A hub linked later takes part without changing
+  the group.
+- **Re-provisioning** is at its defaults: `updateHubAssignment: true` and `migrateDeviceData: true`.
+  A device that provisions again may be moved to another hub, and its twin goes with it. That is
+  the mechanism for moving devices between hubs (step 7 of #48).
+
+### After DPS or the hub is recreated
+
+The certificate registration and the enrollment group belong to the DPS instance: tearing it down
+deletes both, and steps 2 and 3 are repeated. Assign the role again too (step 1): a new instance
+is a new scope. A device that provisioned before keeps its identity in the hub until the hub
+itself is recreated.
+
 ## Naming
 
 Names follow the Cloud Adoption Framework abbreviations:
