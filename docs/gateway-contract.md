@@ -127,8 +127,9 @@ token. `403` is not retried — the token was accepted, and the caller is not al
 
 Delivery is **at least once**. The platform reads an event stream that redelivers from its last
 checkpoint after a restart, it retries a request whose response it never saw, it sends a request
-refused with `401` once more with a new token, and a device may resend a message itself. A receiver will therefore see the same batch more than once, and must
-treat that as normal.
+refused with `401` once more with a new token, it retries a message it could not deliver from a
+dead-letter queue (section 9), and a device may resend a message itself. A receiver will therefore
+see the same batch more than once, and must treat that as normal.
 
 - The `Idempotency-Key` is the batch's `messageId`, and must equal it — otherwise `400`. If they
   could differ, a replay check on the key would say nothing about which message was stored.
@@ -142,8 +143,10 @@ treat that as normal.
 - Because `POST` is made safe to repeat by the key, the sender may retry it like any idempotent
   request.
 
-A receiver keeps keys for at least as long as the platform's event stream retains messages, since
-a redelivery can arrive that late.
+A receiver keeps keys for at least as long as a redelivery can arrive: the platform's event stream
+retains messages for a day in staging, and a dead-lettered message is retried for about four hours. An
+operator can replay a message the retries gave up on later still, and a receiver that has dropped
+its key by then stores that batch a second time.
 
 ---
 
@@ -235,11 +238,13 @@ by `AddTelemetryForwarding` in `src/IIoT.Functions/`.
 | Transport | HTTPS only; a plain-HTTP gateway address is refused before a token is even requested. Loopback is the only exception. |
 | Retries | `408`, `429`, `5xx`, network errors and timeouts are retried with exponential backoff and jitter, honouring `Retry-After`: the standard pipeline from `Microsoft.Extensions.Http.Resilience` — three retries, 10 seconds per attempt, 30 seconds in total by default. Any other `4xx` is never retried by that pipeline; `401` is retried once by the forwarder itself (see Token). |
 | Token | Obtained with the client credentials grant, cached, and renewed five minutes before expiry (at most half its lifetime). Concurrent messages share one refresh. On a `401` the cached token is discarded and the same request — same body, same `Idempotency-Key` — is sent once more with a newly obtained token, so a signing-key rotation at the provider costs no message. That retry is a second pass through the resilience pipeline, with its own retries and its own 30-second budget, and there is never a third. A second `401` is logged at error level as an authentication failure, distinct from transport failures, and the message fails; the new token is kept, since another would fare no better. A `403` is not retried. |
-| Failure | The message ends as `ProcessingOutcome.ForwardingFailed`, logged at error level with the message id, the device and the reason. |
+| Failure | The message ends as `ProcessingOutcome.ForwardingFailed`, logged at error level with the message id, the device and the reason, and is dead-lettered: kept on the Storage queue `forwarding-failed` and sent again by the function `RetryForwarding`, up to eight times, 30 minutes apart, with the same body and the same `Idempotency-Key`, so a receiver that stored an earlier attempt acknowledges the retry as a replay. What the retries give up on moves to `forwarding-failed-poison`, for an operator ([ADR-010](adr/adr-010-dead-letter-handling.md)). |
 
-> **A message that fails to forward is currently lost.** Nothing downstream has it and the
-> platform does not keep it; the log line is the only record. Durable dead-lettering is
-> [#19](https://github.com/asnielsen789/IIoT-platform/issues/19).
+> **A message that fails to forward is kept and retried.** A retried batch carries the original
+> `receivedAt`, so it can arrive hours after readings the platform received later; a receiver
+> already accepts late, buffered readings (section 3). Only a message whose dead-letter entry could
+> not be written is lost, and that is logged at Critical. A rejected message, invalid or from a
+> device whose identity does not match, is never forwarded and never retried.
 
 ### Configuration
 
@@ -272,4 +277,3 @@ setting named in the log.
 | The client secret in Key Vault, `GatewayAuth__ClientSecret` as a Key Vault reference, and the other settings in the infrastructure templates | [#12](https://github.com/asnielsen789/IIoT-platform/issues/12) |
 | The gateway mock configured with the tenant as its `Authority` | [#12](https://github.com/asnielsen789/IIoT-platform/issues/12) |
 | A gateway the deployed Function can reach over HTTPS — the mock hosted somewhere, or exposed through a tunnel — and a way to see what it received beyond its log | [#15](https://github.com/asnielsen789/IIoT-platform/issues/15) |
-| Durable dead-lettering of messages that fail to forward | [#19](https://github.com/asnielsen789/IIoT-platform/issues/19) |

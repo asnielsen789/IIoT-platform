@@ -1,3 +1,4 @@
+using IIoT.Core.Forwarders;
 using IIoT.Core.Interfaces;
 using IIoT.Core.Models;
 using IIoT.Core.Validation;
@@ -36,7 +37,11 @@ public sealed class TelemetryService
     /// When IoT Hub accepted the message. Passed through to the forwarder as the receipt time,
     /// because unlike the device's own timestamps it comes from the platform's clock.
     /// </param>
-    public async Task<ProcessingOutcome> ProcessAsync(
+    /// <returns>
+    /// The outcome, with the message id and, for a forwarding failure, its reason: what a caller
+    /// that dead-letters the message needs (ADR-010). The service itself never keeps a message.
+    /// </returns>
+    public async Task<ProcessingResult> ProcessAsync(
         string payload,
         string? authenticatedDeviceId,
         DateTimeOffset enqueuedAt,
@@ -50,7 +55,7 @@ public sealed class TelemetryService
                 authenticatedDeviceId ?? "(unknown device)",
                 result.Error);
 
-            return ProcessingOutcome.RejectedInvalidPayload;
+            return ProcessingResult.Rejected(ProcessingOutcome.RejectedInvalidPayload);
         }
 
         var message = result.Message!;
@@ -64,7 +69,7 @@ public sealed class TelemetryService
                 "Security event: message {MessageId} carries no authenticated device identity; rejected",
                 message.MessageId);
 
-            return ProcessingOutcome.RejectedUnknownIdentity;
+            return ProcessingResult.Rejected(ProcessingOutcome.RejectedUnknownIdentity, message.MessageId);
         }
 
         // Contract section 4. The body's deviceId is informational and may be absent; when it
@@ -80,7 +85,7 @@ public sealed class TelemetryService
                 authenticatedDeviceId,
                 message.DeviceId);
 
-            return ProcessingOutcome.RejectedIdentityMismatch;
+            return ProcessingResult.Rejected(ProcessingOutcome.RejectedIdentityMismatch, message.MessageId);
         }
 
         // Several measurements mean buffered backfill after an outage. Every entry is processed,
@@ -113,29 +118,27 @@ public sealed class TelemetryService
             // failure is final for this attempt: the gateway refused the message, stayed
             // unavailable through every retry, or could not be reached or authenticated to.
             //
-            // THE MESSAGE IS CURRENTLY LOST. Nothing downstream has it, and nothing here keeps
-            // it. Durable dead-lettering, so a failed message can be inspected and replayed, is
-            // #19 and does not exist yet. Until then this log line is the only record.
-            //
-            // Not rethrown, consistent with the rejections above. Rethrowing would not bring the
-            // message back: the trigger checkpoints past a failed invocation unless a retry
-            // policy is configured, and with one, a gateway outage would hold the whole
-            // partition behind this single message.
+            // Not rethrown, consistent with the rejections above. What happens to the message next
+            // is the caller's decision, not this service's: the IoT Hub function dead-letters it,
+            // and the retry function leaves it on its queue for another attempt (ADR-010). Both
+            // need the reason, so it travels in the result as well as in this line.
             //
             // Cancellation by the caller is not a forwarding failure; it propagates so the host
             // can shut down cleanly.
             _logger.LogError(
                 ex,
-                "Forwarding failed for message {MessageId} from device {DeviceId}: {Reason}. " +
-                "The message was not delivered and will not be retried",
+                "Forwarding failed for message {MessageId} from device {DeviceId}: {Reason}",
                 message.MessageId,
                 authenticatedDeviceId,
                 ex.Message);
 
-            return ProcessingOutcome.ForwardingFailed;
+            return ProcessingResult.ForwardingFailed(
+                message.MessageId,
+                ex.Message,
+                ex is ForwardingException { StatusCode: { } status } ? (int)status : null);
         }
 
-        return ProcessingOutcome.Forwarded;
+        return ProcessingResult.Forwarded(message.MessageId);
     }
 }
 
@@ -143,6 +146,11 @@ public sealed class TelemetryService
 /// What happened to a message. Returned rather than only logged so that tests can assert on the
 /// decision, and so the counts can be published as metrics when observability is built out.
 /// </summary>
+/// <remarks>
+/// The three rejections are permanent: the same payload under the same identity is rejected the
+/// same way every time, so retrying one is pointless. Only <see cref="ForwardingFailed"/> can turn
+/// out differently on another attempt, and only it is dead-lettered (ADR-010).
+/// </remarks>
 public enum ProcessingOutcome
 {
     Forwarded,
@@ -151,8 +159,8 @@ public enum ProcessingOutcome
     RejectedUnknownIdentity,
 
     /// <summary>
-    /// Valid and authenticated, but not delivered downstream. The message is currently lost;
-    /// dead-lettering is #19.
+    /// Valid and authenticated, but not delivered downstream after the forwarder's own retries.
+    /// The IoT Hub function dead-letters the message for a later attempt (ADR-010).
     /// </summary>
     ForwardingFailed
 }

@@ -8,5 +8,11 @@
       },
       "enableLiveMetricsFilters": true
     }
+  },
+  "extensions": {
+    "queues": {
+      "maxDequeueCount": 8,
+      "visibilityTimeout": "00:30:00"
+    }
   }
 }

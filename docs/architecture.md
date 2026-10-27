@@ -50,7 +50,7 @@ graph TB
 
         monitor["Application Insights<br/>---<br/>Logging, metrics,<br/>alerting"]
 
-        storage["Azure Storage<br/>(optional)<br/>---<br/>Dead-letter queue,<br/>audit log"]
+        storage["Azure Storage<br/>---<br/>Host storage,<br/>dead-letter queues"]
     end
 
     iothub -- "Event trigger" --> function
@@ -58,6 +58,7 @@ graph TB
     keyvault -- "secrets" --> function
     function --> apim
     function -- "telemetry" --> monitor
+    function -- "failed forwarding,<br/>retried from the queue" --> storage
     iothub -- "telemetry" --> monitor
 
     auth0["Auth0"] -- "JWT token" --> function
@@ -77,6 +78,7 @@ graph TB
 | **Key Vault** | The device CA's signing keys, which never leave it, and its certificates ([ADR-009](adr/adr-009-device-pki.md)); secrets for the Function. Not a CA itself: `tools/IIoT.DeviceCa` builds the certificates and has Key Vault sign them | Plain keys and RFC 5280 certificates: the keys can move to an HSM, the issuing CA to another provider |
 | **Azure Function** | Core logic: receive → transform → forward. Adapter pattern downstream | Can be relocated to other infrastructure as a container or service |
 | **APIM** | Optional layer for throttling, versioning and logging of outbound calls | Can be removed without affecting the Function |
+| **Azure Storage** | Host storage for the Function, and the dead-letter queues `forwarding-failed` and `forwarding-failed-poison` for messages that could not be forwarded ([ADR-010](adr/adr-010-dead-letter-handling.md)) | The queues have a connection of their own, so they can move to another account; any queue with retry and poison handling could replace them |
 | **Application Insights** | Observability for the whole platform | Replaceable by another monitoring solution |
 
 ---
@@ -117,6 +119,39 @@ sequenceDiagram
     GW-->>AF: 202 Accepted
 
     Note over AF: Log result to Application Insights
+```
+
+When the gateway stays unavailable through the forwarder's retries, the message is not lost
+([ADR-010](adr/adr-010-dead-letter-handling.md)). `ProcessTelemetry` writes it to a Storage queue,
+and `RetryForwarding` sends it again later, through the same validation and identity check, with
+the identity and receipt time of the original delivery, and so with the same body and
+`Idempotency-Key`:
+
+```mermaid
+sequenceDiagram
+    participant AF as ProcessTelemetry
+    participant Q as Queue forwarding-failed
+    participant RF as RetryForwarding
+    participant GW as Downstream Gateway
+    participant P as Queue forwarding-failed-poison
+
+    AF->>GW: HTTPS POST /v1/readings (with retries)
+    GW-->>AF: 503, or no answer
+    AF->>Q: Envelope: payload as received, authenticated device ID, enqueued time
+    Note over Q: Invisible for 30 minutes
+    loop Up to 8 attempts, 30 minutes apart
+        Q->>RF: Entry
+        RF->>GW: Same POST, same Idempotency-Key
+        alt Delivered
+            GW-->>RF: 202 Accepted (or a replay of a batch already stored)
+            Note over Q: Entry deleted
+        else Fails again
+            GW-->>RF: 503
+            Note over Q: Entry kept for the next attempt
+        end
+    end
+    RF->>P: After the last attempt, or when re-validation rejects it
+    Note over P: Kept without expiry, for an operator
 ```
 
 ## Sequence: cloud-to-device configuration

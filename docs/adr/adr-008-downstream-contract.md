@@ -120,3 +120,20 @@ token, obtains a new one and sends the same request once more, with the same bod
   loop.
 
 The client's behaviour is specified in `docs/gateway-contract.md`, sections 4 to 6.
+
+## Update (2026-10-26): dead-lettering
+
+The second consequence above, that a final forwarding failure is logged and the message lost, no
+longer holds ([#19](https://github.com/asnielsen789/IIoT-platform/issues/19)). The decision is
+[ADR-010](adr-010-dead-letter-handling.md).
+
+- **Kept.** A message that ends as `ProcessingOutcome.ForwardingFailed` is written to the Storage
+  queue `forwarding-failed`, with its payload exactly as received, the authenticated identity and
+  the enqueued time. Rejections are still not kept: they would fail the same way again.
+- **Retried with the same Idempotency-Key.** A queue-triggered function forwards the stored message
+  again through the same validation and identity check, with the stored enqueued time, so the
+  gateway receives the same batch and stores it once, as the idempotency rule above intends. Up to
+  eight attempts, 30 minutes apart; then the poison queue, for an operator.
+- **Not rethrown.** The reasoning above stands: the trigger advances its checkpoint past a failed
+  invocation. If the dead-letter write itself fails, the message is logged at Critical and lost,
+  the one edge that remains.

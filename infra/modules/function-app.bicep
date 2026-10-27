@@ -58,6 +58,9 @@ param gatewayAuthClientSecretSecretUri string
 @description('Base address of the downstream gateway (GatewayV1:BaseAddress). HTTPS: the forwarder refuses anything else.')
 param gatewayBaseAddress string
 
+@description('Queue service endpoint of the account holding the dead-letter queues (DeadLetterStorage:queueServiceUri, ADR-010).')
+param deadLetterQueueServiceUri string
+
 @description('Upper bound on on-demand instances. Caps runaway cost and the share of the regional Flex Consumption core quota the app can take.')
 @minValue(1)
 @maxValue(1000)
@@ -193,6 +196,23 @@ resource functionApp 'Microsoft.Web/sites@2025-03-01' = {
         {
           name: 'GatewayV1__BaseAddress'
           value: gatewayBaseAddress
+        }
+        // The dead-letter queues (ADR-010): the connection the RetryForwarding trigger reads, and the
+        // queue client ProcessTelemetry writes with (StorageDeadLetterQueue). Identity-based, like
+        // the host storage above, so no key exists. A prefix of its own although staging points it
+        // at the host storage account: moving the queues to another account is a change of these
+        // three settings and the role assignments, not of the code.
+        {
+          name: 'DeadLetterStorage__queueServiceUri'
+          value: deadLetterQueueServiceUri
+        }
+        {
+          name: 'DeadLetterStorage__credential'
+          value: 'managedidentity'
+        }
+        {
+          name: 'DeadLetterStorage__clientId'
+          value: identityClientId
         }
       ]
     }

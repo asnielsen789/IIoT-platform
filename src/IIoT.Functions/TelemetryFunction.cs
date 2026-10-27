@@ -1,5 +1,6 @@
 using Azure.Messaging.EventHubs;
 using IIoT.Core.Services;
+using IIoT.Functions.DeadLettering;
 using Microsoft.Azure.Functions.Worker;
 using Microsoft.Extensions.Logging;
 
@@ -9,7 +10,9 @@ namespace IIoT.Functions;
 /// The IoT Hub entry point. Kept deliberately thin: it extracts the authenticated identity and
 /// the enqueued time from the transport and delegates every decision to
 /// <see cref="TelemetryService"/>, which has no Azure dependency and is therefore testable
-/// without one.
+/// without one. A message whose forwarding failed is handed to the
+/// <see cref="ForwardingDeadLetterWriter"/>, for <see cref="RetryForwardingFunction"/> to try again
+/// later (ADR-010).
 /// </summary>
 public sealed class TelemetryFunction
 {
@@ -21,11 +24,16 @@ public sealed class TelemetryFunction
     private const string ConnectionDeviceIdProperty = "iothub-connection-device-id";
 
     private readonly TelemetryService _telemetryService;
+    private readonly ForwardingDeadLetterWriter _deadLetters;
     private readonly ILogger<TelemetryFunction> _logger;
 
-    public TelemetryFunction(TelemetryService telemetryService, ILogger<TelemetryFunction> logger)
+    public TelemetryFunction(
+        TelemetryService telemetryService,
+        ForwardingDeadLetterWriter deadLetters,
+        ILogger<TelemetryFunction> logger)
     {
         _telemetryService = telemetryService;
+        _deadLetters = deadLetters;
         _logger = logger;
     }
 
@@ -53,20 +61,30 @@ public sealed class TelemetryFunction
         // measuredAt are not trustworthy as absolute time (section 4 of the contract).
         var enqueuedAt = eventData.EnqueuedTime;
 
-        var outcome = await _telemetryService.ProcessAsync(
+        var result = await _telemetryService.ProcessAsync(
             payload, authenticatedDeviceId, enqueuedAt, context.CancellationToken);
 
-        // The message is never re-thrown on rejection. A payload that fails validation will fail
-        // identically on every retry, so throwing would only block the partition until the
-        // message expires. A forwarding failure is not re-thrown either: the forwarder has
-        // already retried, and TelemetryService has logged it. Until dead-lettering exists
-        // (#19), a message that failed to forward is lost.
-        if (outcome != ProcessingOutcome.Forwarded)
+        // Never rethrown, whatever the outcome. A payload that fails validation will fail
+        // identically on every retry, and the Event Hubs trigger advances its checkpoint past a
+        // failed invocation anyway, so throwing would bring nothing back.
+        //
+        // A forwarding failure is dead-lettered instead: the forwarder has already retried, and the
+        // retry function takes it from here. Only a forwarding failure is: a rejection is final, and
+        // TelemetryService has logged it, an identity mismatch as a security event. The identity is
+        // the authenticated one, since forwarding is attempted only after the identity check.
+        if (result.Outcome == ProcessingOutcome.ForwardingFailed)
+        {
+            await _deadLetters.DeadLetterAsync(
+                payload, authenticatedDeviceId!, enqueuedAt, result, context.CancellationToken);
+            return;
+        }
+
+        if (result.Outcome != ProcessingOutcome.Forwarded)
         {
             _logger.LogDebug(
                 "Message from {DeviceId} completed with outcome {Outcome}",
                 authenticatedDeviceId ?? "(unknown device)",
-                outcome);
+                result.Outcome);
         }
     }
 

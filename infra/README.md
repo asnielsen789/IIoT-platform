@@ -1,7 +1,8 @@
 # Infrastructure
 
 Bicep templates for the platform's Azure resources: IoT Hub with its message routing, Key Vault,
-the Function App on a Flex Consumption plan with its storage account, and monitoring.
+the Function App on a Flex Consumption plan with its storage account and dead-letter queues, and
+monitoring.
 
 > [!WARNING]
 > **Infrastructure is deployed by hand,** following [Deploy](#deploy) below, step by step; the
@@ -19,7 +20,7 @@ the Function App on a Flex Consumption plan with its storage account, and monito
 | `environments/staging.bicepparam` | The `staging` environment, the only one in Azure. `dev` is local development |
 | `modules/identity.bicep` | User-assigned managed identity the Function App runs as |
 | `modules/monitoring.bicep` | Log Analytics workspace and workspace-based Application Insights |
-| `modules/storage.bicep` | Host storage and deployment package container, with the identity's storage roles |
+| `modules/storage.bicep` | Host storage, deployment package container and the dead-letter queues `forwarding-failed` and `forwarding-failed-poison`, with the identity's storage roles ([Dead-letter queues](#dead-letter-queues)) |
 | `modules/key-vault.bicep` | Key Vault (Azure RBAC), with the identity's read access to secrets |
 | `modules/device-ca-keys.bicep` | The device certificate authority's root and issuing CA keys, in that vault ([ADR-009](../docs/adr/adr-009-device-pki.md)) |
 | `modules/iot-hub.bicep` | IoT Hub: shared access policies, message routing, the Function's consumer group, resource logs |
@@ -69,7 +70,7 @@ az deployment sub what-if \
 
 `--location` is where Azure stores the deployment record; the resources take their region from
 the parameter file. Treat what-if output as internal: do not paste it into issues, pull
-requests or commits. On a subscription where nothing is deployed yet, the plan is 27 resources
+requests or commits. On a subscription where nothing is deployed yet, the plan is 32 resources
 to create.
 
 ## Deploy
@@ -136,13 +137,14 @@ az deployment sub what-if \
   --parameters infra/environments/staging.bicepparam
 ```
 
-The first time, expect **27 resources to create**: the resource group; the IoT Hub, its consumer
+The first time, expect **32 resources to create**: the resource group; the IoT Hub, its consumer
 group `telemetry-function` and its diagnostic setting `routes-and-connections`; the Log
 Analytics workspace and Application Insights; the Key Vault with its role assignment, the
 secret `iothub-telemetry-connection` and the device CA keys `device-ca-root` and
 `device-ca-issuing`; the managed identity; the storage account with its blob
-service, container `app-package` and two role assignments; the Flex Consumption plan and the
-Function App; the deployment identity `id-iiot-staging-neu-github`, its federated credential
+service, container `app-package`, queue service, queues `forwarding-failed` and
+`forwarding-failed-poison` and four role assignments, two of them on the queues; the Flex
+Consumption plan and the Function App; the deployment identity `id-iiot-staging-neu-github`, its federated credential
 `github-staging` and its role assignment on the Function App; the gateway mock's App Service
 plan and web app, its two basic-auth publishing policies (`scm`, `ftp`) and its log settings.
 In the IoT Hub's properties, check
@@ -163,7 +165,13 @@ the gateway credentials were added modifies the Function App's app settings, fou
 ([Service-to-service authentication (one-time)](#service-to-service-authentication-one-time)).
 The first deployment after the gateway mock was added creates its five resources and adds
 `GatewayV1__BaseAddress` to the Function App's settings; then publish the mock
-([Gateway mock](#gateway-mock)), since until then the Function forwards to an empty app.
+([Gateway mock](#gateway-mock)), since until then the Function forwards to an empty app. The
+first deployment after dead-lettering was added creates five resources, the storage account's
+queue service, the queues `forwarding-failed` and `forwarding-failed-poison` and the identity's
+role assignment on each, adds three `DeadLetterStorage__*` settings to the Function App, and
+changes nothing else ([Dead-letter queues](#dead-letter-queues)). Deploy it before the code that
+uses it reaches the app; the other way round, `RetryForwarding` stays disabled until the settings
+exist.
 `what-if` does not show app settings at all, since Azure does not return them with the site, so
 that change is not in the plan; step 5 checks it afterwards. Once the CA keys exist, `what-if`
 also lists them as `Modify` with `rotationPolicy` to be deleted: noise, like the role
@@ -332,7 +340,20 @@ az functionapp config appsettings list --name "$FUNC_APP" --resource-group "$RG"
 # The hub's resource logs: expect routes-and-connections with Routes and Connections
 az monitor diagnostic-settings list --resource "$IOT_HUB" --resource-group "$RG" \
   --resource-type Microsoft.Devices/IotHubs --query "[].{name:name, logs:logs[].category}" -o json
+
+# The dead-letter queues: expect forwarding-failed and forwarding-failed-poison
+STORAGE=$(output storageAccountName)
+az rest --method get \
+  --url "https://management.azure.com/subscriptions/{subscriptionId}/resourceGroups/$RG/providers/Microsoft.Storage/storageAccounts/$STORAGE/queueServices/default/queues?api-version=2023-05-01" \
+  --query "value[].name" -o tsv
+
+# Their connection settings: expect the three DeadLetterStorage__ names
+az functionapp config appsettings list --name "$FUNC_APP" --resource-group "$RG" \
+  --query "[?starts_with(name, 'DeadLetterStorage__')].name" -o tsv
 ```
+
+The queue listing reads the storage account through Azure Resource Manager, as step 5 reads the
+app, so it needs no data-plane role. `{subscriptionId}` stays as written, as in step 5.
 
 ### 7. Confirm routing live
 
@@ -534,6 +555,150 @@ az webapp log tail --resource-group "$RG" --name "$MOCK_APP"
 
 The mock keeps what it accepts in memory, so a restart, or the app unloading when idle, empties
 it.
+
+## Dead-lettered messages
+
+A message that passed validation and the identity check, but could not be forwarded even after
+the forwarder's own retries, is dead-lettered
+([ADR-010](../docs/adr/adr-010-dead-letter-handling.md)): `ProcessTelemetry` writes it to the queue
+`forwarding-failed`, and `RetryForwarding` forwards it again, up to eight times, 30 minutes apart.
+An entry the retries give up on, or one a retry refuses for good, ends in
+`forwarding-failed-poison`. Nothing in the platform reads that queue. An operator decides, with
+the commands below, whether to put an entry back for another round or to delete it. Entries do
+not expire, so nothing is lost by waiting.
+
+Run from the repository root in Git Bash, in the shell where `RG` and `output` are set (step 3 of
+[Deploy](#deploy)).
+
+### Following it in the logs
+
+In Application Insights `appi-iiot-staging-neu`, **Logs**:
+
+```kusto
+union traces, exceptions
+| where timestamp > ago(1d)
+| extend text = coalesce(tostring(customDimensions.FormattedMessage), message)
+| where text contains "dead-letter" or text contains "forwarding-failed"
+| project timestamp, severityLevel, text
+| order by timestamp desc
+```
+
+| Line | Meaning |
+|---|---|
+| `Dead-lettered message … to forwarding-failed` | The first attempt failed; the first retry follows in about 30 minutes |
+| `Retrying dead-lettered message … attempt N of 8` | A retry started |
+| `Attempt N of 8 for dead-lettered message … failed` | It failed; the queue retries it after the interval |
+| `Delivered dead-lettered message … on attempt N` | A retry delivered it; the entry is deleted |
+| `Moved dead-lettered message … to forwarding-failed-poison` | Given up, with the reason: the last attempt failed, the payload was rejected on retry, or the entry could not be read |
+| `Message … is lost` (severity 4, Critical) | Forwarding failed and the entry could not be written, because it is too large for a queue message or the write failed. The log line is the only record |
+| `Message has reached MaxDequeueCount of 8. Moving message to queue 'forwarding-failed-poison'` | The runtime's own move, after `RetryForwarding` could not move the entry itself. The entry expires seven days later ([step 2](#2-read-the-poison-queue)) |
+
+### 1. Give yourself the queue roles
+
+Two roles, each on one queue, the narrowest scope Azure RBAC offers for queue data. The actions
+are those of
+[Permissions for calling data operations](https://learn.microsoft.com/rest/api/storageservices/authorize-with-azure-active-directory#permissions-for-queue-service-operations):
+
+| Role | Scope | Needed for |
+|---|---|---|
+| Storage Queue Data Message Processor | Queue `forwarding-failed-poison` | Reading entries without changing them (`peek`: `messages/read`), and taking one and deleting it (`get`, `delete`: `messages/process/action`) |
+| Storage Queue Data Message Sender | Queue `forwarding-failed` | Putting an entry back (`put`: `messages/add/action`). Only for a replay |
+
+**Message Sender on `forwarding-failed` amounts to the right to assert a device's identity.**
+`RetryForwarding` forwards an entry under the `authenticatedDeviceId` the entry carries, so whoever
+can write to that queue can file readings for any device. Assign it for a replay and remove it
+straight after; reading the poison queue needs only Message Processor.
+
+```sh
+STORAGE=$(output storageAccountName)
+ME=$(az ad signed-in-user show --query id -o tsv | tr -d '\r')
+ST_ID=$(az storage account show --name "$STORAGE" --resource-group "$RG" --query id -o tsv | tr -d '\r')
+QUEUES="$ST_ID/queueServices/default/queues"
+
+MSYS_NO_PATHCONV=1 az role assignment create --assignee-object-id "$ME" --assignee-principal-type User \
+  --role "Storage Queue Data Message Processor" --scope "$QUEUES/forwarding-failed-poison" -o none
+```
+
+`MSYS_NO_PATHCONV=1` is needed on the role commands only, whose scope starts with
+`/subscriptions/` ([why](#1-assign-the-operators-roles)). None of the `az storage message`
+arguments below starts with `/`: an entry's content always starts with `eyJ`, the base64 of `{"`,
+and a message ID is a GUID. A new role assignment can take a few minutes to apply, up to 30
+according to Microsoft.
+
+### 2. Read the poison queue
+
+```sh
+# What waits, without changing anything: up to 32 entries per call
+az storage message peek --queue-name forwarding-failed-poison --account-name "$STORAGE" --auth-mode login \
+  --num-messages 32 --query "[].{id:id, inserted:insertionTime, expires:expirationTime}" -o table
+
+# The first entry's envelope
+az storage message peek --queue-name forwarding-failed-poison --account-name "$STORAGE" --auth-mode login \
+  --query "[0].content" -o tsv | tr -d '\r' | base64 -d; echo
+```
+
+- **The content is base64**, the encoding the Functions queue trigger expects by default. The Azure
+  CLI stores and returns message text as it is, without encoding or decoding it, so `base64 -d`
+  shows the entry.
+- **The entry is the envelope**: `envelopeVersion`, `messageId`, `authenticatedDeviceId`,
+  `enqueuedAt`, `deadLetteredAt`, `failure` with the first attempt's reason and status code, and
+  the `payload` exactly as the device sent it, as an escaped JSON string. Why it ended in the poison
+  queue is in the Function's log, above. The payload is the device's readings and metadata: keep
+  it local, like what-if output.
+- **Check `expires` against `inserted`.** The platform writes every entry without expiry. An entry
+  that expires exactly seven days after it was inserted, the service's default, was moved by the
+  runtime itself, which happens only when `RetryForwarding`'s own move failed. It is gone after that
+  date, so handle it first.
+
+### 3. Put an entry back, or delete it
+
+First fix what made it fail. An entry rejected on retry, such as a payload of a schema version the
+deployed build no longer accepts, is rejected again until a build that accepts it is deployed. A
+replay after a gateway outage needs the gateway to be up.
+
+```sh
+# Take the first entry: invisible to everyone else for five minutes, long enough for the rest
+read -r ID RECEIPT CONTENT < <(az storage message get --queue-name forwarding-failed-poison \
+  --account-name "$STORAGE" --auth-mode login --visibility-timeout 300 \
+  --query "[0].[id, popReceipt, content]" -o tsv | tr -d '\r')
+printf '%s' "$CONTENT" | base64 -d | head -c 300; echo
+```
+
+To replay it, assign Message Sender on `forwarding-failed`, put the content back exactly as it
+came, still base64, without expiry, then delete it from the poison queue and remove the role:
+
+```sh
+MSYS_NO_PATHCONV=1 az role assignment create --assignee-object-id "$ME" --assignee-principal-type User \
+  --role "Storage Queue Data Message Sender" --scope "$QUEUES/forwarding-failed" -o none
+
+az storage message put --queue-name forwarding-failed --account-name "$STORAGE" --auth-mode login \
+  --content "$CONTENT" --time-to-live -1 -o none
+az storage message delete --queue-name forwarding-failed-poison --account-name "$STORAGE" --auth-mode login \
+  --id "$ID" --pop-receipt "$RECEIPT"
+
+MSYS_NO_PATHCONV=1 az role assignment delete --assignee "$ME" \
+  --role "Storage Queue Data Message Sender" --scope "$QUEUES/forwarding-failed"
+```
+
+- **Put before delete.** If the `put` fails, the entry reappears in the poison queue after five
+  minutes. If the `delete` fails after a `put`, the entry is replayed and also stays in the poison
+  queue; replaying it once more later does no harm, since the gateway stores a batch once.
+- **The content goes back unchanged.** Decoded or edited text would no longer be what the trigger
+  expects: text that is not base64 is moved straight back to the poison queue by the runtime.
+- **A replayed entry starts again at attempt 1**, so it gets eight more attempts, the first within
+  about a minute while the app runs. The log shows `Retrying dead-lettered message … attempt 1`.
+- **A very large entry cannot be put back from the command line.** Its base64 is passed as one
+  argument, and Windows limits a command line to 32,767 characters, so an entry above about 24 KB
+  needs another client, such as Azure Storage Explorer signed in with Microsoft Entra ID. A message
+  of the size the contract describes is far below that.
+
+To discard an entry instead, run only the `delete`. Remove the Message Processor role when you are
+done:
+
+```sh
+MSYS_NO_PATHCONV=1 az role assignment delete --assignee "$ME" \
+  --role "Storage Queue Data Message Processor" --scope "$QUEUES/forwarding-failed-poison"
+```
 
 ## Continuous deployment
 
@@ -1100,11 +1265,28 @@ the app, comes later.
 |---|---|---|
 | Storage Blob Data Owner | Storage account | Host storage, the deployment package, Event Hubs trigger checkpoints |
 | Storage Table Data Contributor | Storage account | Diagnostic events the host writes when the app cannot start |
+| Storage Queue Data Contributor | Queue `forwarding-failed` | `ProcessTelemetry` adds dead-letter entries; the `RetryForwarding` trigger reads the queue's length, and receives, releases and deletes entries |
+| Storage Queue Data Message Sender | Queue `forwarding-failed-poison` | Moving an entry to the poison queue, by the trigger after the last attempt or by `RetryForwarding` itself |
 | Key Vault Secrets User | Key Vault | Resolving the Key Vault references: `IoTHubConnection` and the gateway credentials `GatewayAuth__ClientId` and `GatewayAuth__ClientSecret` |
 
 Host storage is identity-based (`AzureWebJobsStorage__accountName`, `__credential`,
 `__clientId`) and shared-key access to the storage account is disabled: no account key is used
-anywhere.
+anywhere. The dead-letter queues are reached the same way, through a connection of their own,
+`DeadLetterStorage__queueServiceUri`, `__credential` and `__clientId`, with the same identity.
+
+The queue roles are each on one queue, the narrowest scope Azure RBAC offers for queue data
+([Authorize access to queues using Microsoft Entra ID](https://learn.microsoft.com/azure/storage/queues/authorize-access-azure-active-directory#resource-scope)),
+so the identity can reach these two queues and no other. For a queue trigger, Microsoft lists
+Storage Queue Data Reader and Storage Queue Data Message Processor, and for queue output Storage
+Queue Data Contributor or Message Sender
+([Grant permissions to an identity](https://learn.microsoft.com/azure/azure-functions/manage-connections?pivots=functions-auth-identity&tabs=bindings#grant-permissions-to-an-identity)).
+On `forwarding-failed` the trigger's pair is not enough: after a failed attempt the trigger makes
+the entry invisible until the next one with Update Message, which needs `messages/write`
+([Permissions for calling data operations](https://learn.microsoft.com/rest/api/storageservices/authorize-with-azure-active-directory#permissions-for-queue-service-operations)),
+and of the built-in queue roles only Contributor grants it. What Contributor adds beyond the need,
+deleting and changing that one queue, is a candidate for a custom role in the
+[security review (#21)](https://github.com/asnielsen789/IIoT-platform/issues/21). On the poison
+queue the identity only ever adds an entry, so Message Sender suffices.
 
 The deploy workflow logs in as a second user-assigned identity, `id-iiot-staging-neu-github`
 ([Continuous deployment](#continuous-deployment)). The two share no role: the app's identity has
@@ -1294,6 +1476,51 @@ memory. An operator with a real downstream system drops the module and points
   `az webapp deploy` uses Microsoft Entra ID. HTTPS only, TLS 1.2 minimum, FTP disabled.
 - **Its log stays on the app** (file system, three days), for `az webapp log tail`. Nothing goes
   to Application Insights, so the mock adds nothing to the workspace's ingestion or its daily cap.
+
+### Dead-letter queues
+
+Decided in [ADR-010](../docs/adr/adr-010-dead-letter-handling.md). `modules/storage.bicep` declares
+the queue service and both queues, `forwarding-failed` and its poison queue
+`forwarding-failed-poison`, in the host storage account; `modules/function-app.bicep` sets their
+connection.
+
+- **Only forwarding failures.** A message rejected for its payload or its identity would fail the
+  same way on every attempt, and is already logged, so it is not dead-lettered.
+- **Both queues are declared.** The trigger's poison move and the queue client create a queue only
+  when it is missing, so with both in place no identity needs the right to create a queue, and
+  nothing changes the account's layout at run time.
+- **A connection of its own**, `DeadLetterStorage__queueServiceUri`, `__credential` and
+  `__clientId`, although it points at the host storage account: moving the queues to another account
+  changes these settings and the role assignments, not the code.
+- **The schedule is the queue trigger's**, in `src/IIoT.Functions/host.json`: `maxDequeueCount` 8,
+  and `visibilityTimeout` 30 minutes, which Microsoft defines as "the time interval between retries
+  when processing of a message fails"
+  ([host.json settings](https://learn.microsoft.com/azure/azure-functions/functions-bindings-storage-queue#host-json)).
+  The first retry follows 30 minutes after the failure, the last about four hours after. For a live
+  test, the app settings `AzureFunctionsJobHost__extensions__queues__visibilityTimeout` and
+  `__maxDequeueCount` override `host.json`, and the code follows them; changing them restarts the
+  app.
+- **Entries never expire.** The service's default time-to-live is seven days; the platform writes
+  `-1`, which means "does not expire" ([Put Message](https://learn.microsoft.com/rest/api/storageservices/put-message)).
+  For the same reason `RetryForwarding` moves an entry to the poison queue itself on the last
+  attempt: the runtime's own move writes it with the default and lets it expire.
+- **One entry, one queue message.** A queue message is at most 64 KiB once encoded, and the trigger
+  expects base64, so an entry may be 48 KiB. The largest message the contract describes is about
+  ten kilobytes as an entry; a larger one, possible because the schema allows unknown fields, is
+  refused and logged at Critical rather than truncated.
+- **Missing settings do not stop the app.** Without the `DeadLetterStorage` settings,
+  `RetryForwarding` fails indexing and is disabled, and every dead-letter write is logged at
+  Critical with the setting named, while `ProcessTelemetry` goes on processing.
+- **The queue listener is less forgiving than the Event Hubs one.** It backs off on a missing queue
+  or a server error, but a `403`, or a token it cannot obtain, ends the host, which the platform then
+  restarts. After the first deployment that creates the role assignments, expect host restarts
+  until they have propagated, which Microsoft says can take up to 30 minutes; messages wait in IoT
+  Hub meanwhile and are processed from the checkpoint. Locally the host stops for good: run Azurite
+  and set `DeadLetterStorage` to `UseDevelopmentStorage=true` in `local.settings.json`, since
+  `credential` set to `managedidentity` cannot obtain a token on a developer machine.
+- **Cost.** Queue operations cost US$0.004 per 10,000 in North Europe (Azure Retail Prices API,
+  Queues v2, Standard LRS). The trigger polls an empty queue at most once a minute while an instance
+  runs, about 43,000 operations a month, so a few US cents at most.
 
 ## What the first deployment confirmed
 

@@ -25,6 +25,22 @@
     -->
     <PackageReference Include="Azure.Messaging.EventHubs" Version="5.12.2" />
     <!--
+      The credential for the dead-letter queue client (ADR-010): a ManagedIdentityCredential for the
+      Function's user-assigned identity, built from the same DeadLetterStorage__credential and
+      __clientId settings the queue trigger reads. Application Insights already brings 1.17.0 into
+      the graph; referenced directly because StorageDeadLetterQueue uses it, so that it is not held
+      wherever a dependency happens to leave it.
+    -->
+    <PackageReference Include="Azure.Identity" Version="1.21.0" />
+    <!--
+      The client ProcessTelemetry writes dead-letter entries with, and RetryForwarding moves an entry
+      to the poison queue with (ADR-010). Not an output binding: a write that fails inside the
+      function can be caught and logged with the message it concerns, which a binding the host
+      writes after the function has returned cannot. The queue extension below brings 12.21.0;
+      referenced directly because the code uses it.
+    -->
+    <PackageReference Include="Azure.Storage.Queues" Version="12.28.1" />
+    <!--
       Held on 2.x deliberately. Application Insights 3.x is a breaking rewrite that removed types,
       such as ITelemetryInitializer, which Microsoft.Azure.Functions.Worker.ApplicationInsights
       (built against the 2.x line) still uses. A 3.x package compiles, then crashes the worker on
@@ -35,6 +51,12 @@
     <PackageReference Include="Microsoft.Azure.Functions.Worker" Version="2.52.0" />
     <PackageReference Include="Microsoft.Azure.Functions.Worker.ApplicationInsights" Version="2.51.0" />
     <PackageReference Include="Microsoft.Azure.Functions.Worker.Extensions.EventHubs" Version="6.5.0" />
+    <!--
+      The queue trigger of RetryForwarding (ADR-010). Like the Event Hubs extension, it also adds a
+      host extension to the project Azure.Functions.Sdk generates under obj/azure_functions/, which
+      no SBOM and no Dependabot run sees (https://github.com/asnielsen789/IIoT-platform/issues/35).
+    -->
+    <PackageReference Include="Microsoft.Azure.Functions.Worker.Extensions.Storage.Queues" Version="5.5.5" />
     <PackageReference Include="Microsoft.Extensions.Http.Resilience" Version="10.11.0" />
   </ItemGroup>
 
