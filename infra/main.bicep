@@ -94,6 +94,7 @@ var names = {
   iotHub: 'iot-${nameStem}-${uniqueSuffix}'
   functionPlan: 'asp-${nameStem}'
   functionApp: 'func-${nameStem}-${uniqueSuffix}'
+  provisioningService: 'provs-${nameStem}-${uniqueSuffix}'
   gatewayMockPlan: 'asp-${gatewayMockNameStem}-gateway-mock'
   gatewayMockApp: 'app-${gatewayMockNameStem}-gateway-mock-${uniqueSuffix}'
 }
@@ -108,6 +109,10 @@ var tags = {
 // holds the connection string built from it (ADR-007).
 var telemetryReaderPolicyName = 'function-telemetry-reader'
 var telemetryConnectionSecretName = 'iothub-telemetry-connection'
+
+// The Device Provisioning Service's own IoT Hub policy (#48): RegistryWrite and ServiceConnect,
+// the two rights DPS needs to create device identities in the hub.
+var dpsLinkPolicyName = 'dps-link'
 
 // The Function's own consumer group on the hub's built-in endpoint (#9). Created by the IoT Hub
 // module and handed to the Function App as the IoTHubConsumerGroup setting.
@@ -210,12 +215,29 @@ module iotHub 'modules/iot-hub.bicep' = {
     tags: tags
     skuName: iotHubSkuName
     telemetryReaderPolicyName: telemetryReaderPolicyName
+    dpsLinkPolicyName: dpsLinkPolicyName
     telemetryConsumerGroupName: telemetryConsumerGroupName
     logAnalyticsWorkspaceName: names.logAnalytics
   }
   // The hub's diagnostic setting writes to the workspace.
   dependsOn: [
     monitoring
+  ]
+}
+
+// Zero-touch provisioning (#48), linked to the hub through the hub's `dps-link` policy. After
+// the hub, which regenerates its keys on every deployment, so the link always gets the new key.
+module provisioningService 'modules/provisioning-service.bicep' = {
+  scope: rg
+  params: {
+    name: names.provisioningService
+    location: location
+    tags: tags
+    iotHubName: names.iotHub
+    linkPolicyName: dpsLinkPolicyName
+  }
+  dependsOn: [
+    iotHub
   ]
 }
 
@@ -326,6 +348,12 @@ output applicationInsightsName string = monitoring.outputs.applicationInsightsNa
 
 @description('Gateway mock web app name, for deploying the mock and tailing its log.')
 output gatewayMockAppName string = gatewayMock.outputs.name
+
+@description('Device Provisioning Service name, for the enrollment group and its CA (#48).')
+output provisioningServiceName string = provisioningService.outputs.name
+
+@description('ID scope devices present to DPS. An identifier, not a secret.')
+output provisioningIdScope string = provisioningService.outputs.idScope
 
 @description('Client ID of the identity the deploy workflow logs in with: the value of the GitHub environment variable AZURE_CLIENT_ID. An identifier, not a secret.')
 output githubDeploymentClientId string = githubDeployment.outputs.clientId

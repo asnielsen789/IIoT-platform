@@ -25,6 +25,9 @@ param skuName string
 @description('Name of the dedicated shared access policy the Function reads telemetry with.')
 param telemetryReaderPolicyName string
 
+@description('Name of the dedicated shared access policy the Device Provisioning Service links to the hub with.')
+param dpsLinkPolicyName string
+
 @description('Consumer group on the built-in endpoint that the Function reads, and no other reader uses.')
 param telemetryConsumerGroupName string
 
@@ -137,6 +140,13 @@ resource iotHub 'Microsoft.Devices/IotHubs@2023-06-30' = {
       {
         keyName: telemetryReaderPolicyName
         rights: 'ServiceConnect'
+      }
+      // The Device Provisioning Service's link (#48): the two rights DPS documents as necessary
+      // to create device identities, and nothing else. Its own policy, for the same reason as
+      // the Function's.
+      {
+        keyName: dpsLinkPolicyName
+        rights: 'RegistryWrite, ServiceConnect'
       }
     ]
 
