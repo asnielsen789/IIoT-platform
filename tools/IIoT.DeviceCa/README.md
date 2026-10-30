@@ -85,11 +85,12 @@ both steps is the one proving ownership.
 ### `issue`: issue a device certificate and register the device
 
 ```
-dotnet run --project tools/IIoT.DeviceCa -- issue --vault <name|uri> --hub <name|hostname> \
+dotnet run --project tools/IIoT.DeviceCa -- issue --vault <name|uri> (--hub <name|hostname> | --no-register) \
   --csr <file> --device-id <id> [--out <dir>]
 ```
 
-Issues a certificate for the key in a device's CSR and registers the device in IoT Hub. The CSR
+Issues a certificate for the key in a device's CSR and registers the device in IoT Hub, or, with
+`--no-register`, leaves the registration to the Device Provisioning Service. The CSR
 comes from the device; for the simulated device it is what `IIoT.TestClient create-csr` writes
 ([test client README](../IIoT.TestClient/README.md#certificate-authentication)).
 
@@ -126,12 +127,27 @@ Then it signs and writes:
 Characters that some file systems refuse, such as `:`, become `_` in the file names; the test
 client names its key and CSR the same way.
 
+**`--no-register`, for a device that provisions itself through DPS**
+([#48](https://github.com/asnielsen789/IIoT-platform/issues/48)). The tool issues and writes as
+above, but opens no hub and registers nothing. The enrollment group for the issuing CA creates the
+identity when the device first connects to DPS
+([Zero-touch provisioning (one-time)](../../infra/README.md#zero-touch-provisioning-one-time)).
+`--no-register` takes the place of `--hub`: one of the two is required, and both together are an
+error, so leaving out `--hub` can never skip a registration by accident.
+
+The device ID is then checked against DPS's rules as well, because the certificate's CN becomes the
+registration ID and, from that, the device ID in the hub: ASCII letters and digits and `- . _ :`,
+ending in a letter, a digit or `-`, at most 64 characters
+([DPS terminology](https://learn.microsoft.com/azure/iot-dps/concepts-service#registration-id)).
+`tank@000003`, a valid IoT Hub device ID, is refused there, since DPS could never provision it.
+
 ### Options
 
 | Option | Commands | What it does |
 |---|---|---|
 | `--vault <name\|uri>` | all | The Key Vault holding the CA. A bare name gains `https://` and `.vault.azure.net`; a value with `://` is used as it is, for another cloud. |
 | `--hub <name\|hostname>` | `issue` | The IoT hub to register the device in. A bare name gains `.azure-devices.net`. |
+| `--no-register` | `issue` | Instead of `--hub`: register nothing, because the device provisions itself through DPS. The device ID must also be a valid DPS registration ID. |
 | `--csr <file>` | `issue` | The device's CSR, PEM. |
 | `--device-id <id>` | `issue` | The IoT Hub device ID, and the certificate's subject. |
 | `--out <dir\|file>` | `issue`, `ca-certificate` | `issue`: the directory for the certificate and chain, created if missing; default the current directory. `ca-certificate`: the file; default standard output. |

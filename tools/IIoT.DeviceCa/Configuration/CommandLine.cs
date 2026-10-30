@@ -19,11 +19,12 @@ public static class CommandLine
               secrets device-ca-root-certificate and device-ca-issuing-certificate. Refuses to
               replace existing ones without --force: devices already issued chain to them.
 
-          IIoT.DeviceCa issue --vault <name> --hub <name> --csr <file> --device-id <id> [--out <dir>]
+          IIoT.DeviceCa issue --vault <name> (--hub <name> | --no-register) --csr <file> --device-id <id> [--out <dir>]
               Issue a device certificate for the key in a CSR, with subject CN=<id> whatever the
               CSR asks for, write <id>.cert.pem and <id>.chain.pem (device and issuing CA) to
               <dir> (default: the current directory), and register the device in the hub as
-              CA-authenticated.
+              CA-authenticated. With --no-register, register nothing: the device provisions
+              itself through DPS, so <id> must also be a valid DPS registration ID.
 
           IIoT.DeviceCa ca-certificate --vault <name> [--out <file>]
               Write the issuing CA certificate, the one to register in IoT Hub, to <file> or to
@@ -35,6 +36,7 @@ public static class CommandLine
           --csr <file>            The device's certificate signing request, PEM.
           --device-id <id>        The IoT Hub device ID, and the certificate's subject.
           --out <dir|file>        Where to write.
+          --no-register           issue only, instead of --hub: leave the registration to DPS.
           --force                 init only: replace existing CA certificates.
           -h, --help              This text.
 
@@ -59,7 +61,7 @@ public static class CommandLine
             throw new CommandLineException($"Unknown command '{command}'.");
 
         string? vault = null, hub = null, csr = null, deviceId = null, output = null;
-        string? force = null;
+        string? force = null, noRegister = null;
 
         for (var i = 1; i < args.Length; i++)
         {
@@ -86,6 +88,9 @@ public static class CommandLine
                 case "--force":
                     force = argument;
                     break;
+                case "--no-register":
+                    noRegister = argument;
+                    break;
                 default:
                     throw new CommandLineException($"Unknown option '{argument}'.");
             }
@@ -94,20 +99,39 @@ public static class CommandLine
         switch (command)
         {
             case "init":
-                RejectUnused(command, ("--hub", hub), ("--csr", csr), ("--device-id", deviceId), ("--out", output));
+                RejectUnused(
+                    command, ("--hub", hub), ("--csr", csr), ("--device-id", deviceId), ("--out", output),
+                    ("--no-register", noRegister));
                 return new InitCommandLine(Required(vault, "--vault", command), force is not null);
 
             case "issue":
                 RejectUnused(command, ("--force", force));
+
+                // Exactly one of the two: the hub is only used to register, and leaving it out by
+                // accident must not silently skip the registration.
+                if (noRegister is not null && hub is not null)
+                {
+                    throw new CommandLineException(
+                        "issue takes --hub or --no-register, not both: the hub is only used to register the device.");
+                }
+
+                if (noRegister is null && string.IsNullOrWhiteSpace(hub))
+                {
+                    throw new CommandLineException(
+                        "issue needs --hub, or --no-register when the device provisions itself through DPS.");
+                }
+
                 return new IssueCommandLine(
                     Required(vault, "--vault", command),
-                    Required(hub, "--hub", command),
+                    noRegister is null ? hub!.Trim() : null,
                     Required(csr, "--csr", command),
                     Required(deviceId, "--device-id", command),
                     string.IsNullOrWhiteSpace(output) ? "." : output);
 
             default:
-                RejectUnused(command, ("--hub", hub), ("--csr", csr), ("--device-id", deviceId), ("--force", force));
+                RejectUnused(
+                    command, ("--hub", hub), ("--csr", csr), ("--device-id", deviceId), ("--force", force),
+                    ("--no-register", noRegister));
                 return new CaCertificateCommandLine(
                     Required(vault, "--vault", command), string.IsNullOrWhiteSpace(output) ? null : output);
         }
@@ -146,7 +170,8 @@ public abstract record DeviceCaCommand;
 public sealed record InitCommandLine(string Vault, bool Force) : DeviceCaCommand;
 
 /// <summary><c>issue</c>: issue a device certificate and register the device.</summary>
-public sealed record IssueCommandLine(string Vault, string Hub, string CsrFile, string DeviceId, string OutputDirectory)
+/// <param name="Hub">The hub to register the device in, or <see langword="null"/> with <c>--no-register</c>.</param>
+public sealed record IssueCommandLine(string Vault, string? Hub, string CsrFile, string DeviceId, string OutputDirectory)
     : DeviceCaCommand;
 
 /// <summary><c>ca-certificate</c>: export the issuing CA certificate.</summary>

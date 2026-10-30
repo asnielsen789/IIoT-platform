@@ -203,7 +203,49 @@ public sealed class IssueCommandTests : IDisposable
         Assert.Equal(expected, IssueCommand.FileStem(deviceId));
     }
 
+    [Fact]
+    public async Task Run_WithoutARegistry_IssuesAndLeavesTheRegistrationToDps()
+    {
+        var output = new StringWriter();
+
+        var issued = await IssueWithoutRegistry("tank-000003", output);
+
+        Assert.False(issued.Registered);
+        Assert.True(File.Exists(issued.CertificatePath));
+        Assert.True(File.Exists(issued.ChainPath));
+        using var certificate = X509Certificate2.CreateFromPem(File.ReadAllText(issued.CertificatePath));
+        Assert.Equal("CN=tank-000003", certificate.Subject);
+        Assert.Contains("provisions itself through DPS", output.ToString(), StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("tank@000003")] // a valid IoT Hub device ID, not a valid registration ID
+    [InlineData("tank-000003.")]
+    [InlineData("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")] // 65 characters
+    public async Task Run_WithoutARegistry_RefusesAnIdDpsCannotProvision(string deviceId)
+    {
+        var exception = await Assert.ThrowsAsync<CaRefusedException>(() => IssueWithoutRegistry(deviceId, TextWriter.Null));
+
+        Assert.Contains("registration ID", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("Nothing was issued", exception.Message, StringComparison.Ordinal);
+        Assert.False(Directory.Exists(Path.Combine(_directory, "out")));
+    }
+
+    [Fact]
+    public async Task Run_WithARegistry_AcceptsAnIdOnlyIotHubAllows()
+    {
+        // DPS's stricter rules apply only when DPS registers the device.
+        var issued = await Issue("tank@000002");
+
+        Assert.True(issued.Registered);
+        Assert.Equal(["tank@000002"], _registry.Registrations);
+    }
+
     private Task<IssuedCertificate> Issue(string deviceId = DeviceId) =>
         new IssueCommand(_vault, _registry, new FixedTime(Now), TextWriter.Null)
+            .RunAsync(_csrFile, deviceId, Path.Combine(_directory, "out"), CancellationToken.None);
+
+    private Task<IssuedCertificate> IssueWithoutRegistry(string deviceId, TextWriter output) =>
+        new IssueCommand(_vault, registry: null, new FixedTime(Now), output)
             .RunAsync(_csrFile, deviceId, Path.Combine(_directory, "out"), CancellationToken.None);
 }
