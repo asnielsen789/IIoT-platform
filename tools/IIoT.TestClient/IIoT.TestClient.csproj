@@ -27,6 +27,9 @@
     <Content Include="..\..\docs\schemas\examples\*.json"
       Link="Fixtures\%(Filename)%(Extension)"
       CopyToOutputDirectory="PreserveNewest" />
+
+    <!-- The reference fleet (#79): the default of the fleet command. No secrets in it. -->
+    <Content Include="Fleet\staging-fleet.json" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
 </Project>

@@ -1,4 +1,5 @@
 using System.Globalization;
+using IIoT.TestClient.Fleet;
 using IIoT.TestClient.Payloads;
 using IIoT.TestClient.Provisioning;
 
@@ -36,6 +37,9 @@ public static class CommandLine
     /// <summary>The first argument that selects registration through DPS instead of a run.</summary>
     public const string ProvisionCommand = "provision";
 
+    /// <summary>The first argument that selects a fleet's simulated history instead of a run.</summary>
+    public const string FleetCommand = "fleet";
+
     /// <summary>Usage text, printed for <c>--help</c> and for any usage error.</summary>
     public const string Usage = """
         IIoT.TestClient — simulated NB-IoT device publishing contract fixtures to Azure IoT Hub
@@ -47,6 +51,7 @@ public static class CommandLine
           IIoT.TestClient --hub <name|hostname> --devices <path> --device-count <n> [options]
           IIoT.TestClient create-csr --device-id <id> [--out <dir>]
           IIoT.TestClient provision --id-scope <scope> --cert <file> --key <file> [options]
+          IIoT.TestClient fleet --hub <name|hostname> [options]
 
         Target:
           --hub <name|hostname>   IoT Hub. A bare name gains '.azure-devices.net'.
@@ -101,6 +106,20 @@ public static class CommandLine
           --no-send               Stop once DPS has assigned the device.
           Registers with DPS, waits for the assignment, then connects to the hub DPS named and
           sends one message.
+
+        A simulated fleet (fleet):
+          --hub <name|hostname>   IoT Hub. Falls back to IOT_HUB. Not needed with --dry-run.
+          --fleet <file>          The fleet file. Default: the reference fleet, staging-fleet.json.
+          --secrets <dir>         Where each device's <id>.chain.pem (or .cert.pem) and <id>.key.pem
+                                  are. Default: ~/.secrets/iiot. A device without them is skipped.
+          --hours <n>             How far back each device's history reaches. Default 24.
+          --sample-every <min>    How often a device measures. Default 60.
+          --send-every <min>      How often it sends what it measured. Default 240.
+          --device <id>           Only this device; repeatable. Default: every device in the file.
+          --dry-run               Print each device's newest message, connect to nothing.
+          Each device connects with its own certificate and sends its history as buffered
+          messages, tanks, chargers, car washes and oil separators alike (ADR-011). The hub must
+          know the devices already: provision them first.
         """;
 
     /// <summary>Parses <paramref name="args"/> into a validated configuration.</summary>
@@ -365,6 +384,89 @@ public static class CommandLine
             Send = send,
             Fixture = Trimmed(fixture) ?? TelemetryFixtures.ValidSelector
         };
+    }
+
+    /// <summary>Whether <paramref name="args"/> asks for <c>fleet</c> rather than a run.</summary>
+    public static bool IsFleet(string[] args)
+    {
+        ArgumentNullException.ThrowIfNull(args);
+
+        return args.Length > 0 && args[0] == FleetCommand;
+    }
+
+    /// <summary>Parses a <c>fleet</c> command line, starting with the command itself.</summary>
+    /// <param name="args">The raw command line, <c>fleet</c> first.</param>
+    /// <param name="environment">Environment lookup, for the <c>IOT_HUB</c> fallback.</param>
+    /// <param name="defaultFleetFile">The fleet file when <c>--fleet</c> is absent.</param>
+    /// <param name="defaultSecrets">The secrets directory when <c>--secrets</c> is absent.</param>
+    /// <returns>The options, or <see langword="null"/> when help was requested.</returns>
+    /// <exception cref="CommandLineException">The arguments do not form the command.</exception>
+    public static FleetOptions? ParseFleet(
+        string[] args, Func<string, string?> environment, string defaultFleetFile, string defaultSecrets)
+    {
+        ArgumentNullException.ThrowIfNull(environment);
+
+        if (!IsFleet(args))
+            throw new CommandLineException($"Expected '{FleetCommand}' as the first argument.");
+
+        string? hub = null;
+        string? fleetFile = null;
+        string? secrets = null;
+        var schedule = FleetSchedule.Default;
+        var devices = new List<string>();
+        var dryRun = false;
+
+        for (var i = 1; i < args.Length; i++)
+        {
+            var argument = args[i];
+            switch (argument)
+            {
+                case "-h" or "--help":
+                    return null;
+                case "--hub":
+                    hub = Value(args, ref i);
+                    break;
+                case "--fleet":
+                    fleetFile = Value(args, ref i);
+                    break;
+                case "--secrets":
+                    secrets = Value(args, ref i);
+                    break;
+                case "--hours":
+                    schedule = schedule with { Window = TimeSpan.FromHours(Integer(args, ref i)) };
+                    break;
+                case "--sample-every":
+                    schedule = schedule with { SampleEvery = TimeSpan.FromMinutes(Integer(args, ref i)) };
+                    break;
+                case "--send-every":
+                    schedule = schedule with { SendEvery = TimeSpan.FromMinutes(Integer(args, ref i)) };
+                    break;
+                case "--device":
+                    devices.Add(Value(args, ref i).Trim());
+                    break;
+                case "--dry-run":
+                    dryRun = true;
+                    break;
+                default:
+                    // Includes --cert and --device-key: each device's credential is found by its ID.
+                    throw new CommandLineException($"{FleetCommand} does not take '{argument}'.");
+            }
+        }
+
+        if (schedule.Problem() is { } problem)
+            throw new CommandLineException(problem);
+
+        hub = Trimmed(hub) ?? Trimmed(environment(HubVariable));
+        if (hub is null && !dryRun)
+            throw new CommandLineException($"{FleetCommand} needs --hub (or {HubVariable}), unless it is a --dry-run.");
+
+        return new FleetOptions(
+            hub,
+            Trimmed(fleetFile) ?? defaultFleetFile,
+            Trimmed(secrets) ?? defaultSecrets,
+            schedule,
+            devices,
+            dryRun);
     }
 
     private static string? Trimmed(string? value) =>
