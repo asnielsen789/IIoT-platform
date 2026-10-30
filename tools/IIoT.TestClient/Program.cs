@@ -1,5 +1,6 @@
 using IIoT.TestClient.Authentication;
 using IIoT.TestClient.Configuration;
+using IIoT.TestClient.Fleet;
 using IIoT.TestClient.Payloads;
 using IIoT.TestClient.Provisioning;
 using IIoT.TestClient.Simulation;
@@ -19,6 +20,9 @@ public static class Program
 
         if (CommandLine.IsProvision(args))
             return await ProvisionAsync(args);
+
+        if (CommandLine.IsFleet(args))
+            return await FleetAsync(args);
 
         TestClientOptions? options;
         try
@@ -116,6 +120,54 @@ public static class Program
             $"--device-id {options.DeviceId} --out \"{options.OutputDirectory}\"");
         Console.WriteLine("For a device DPS registers (provision), use --no-register instead of --hub.");
         return 0;
+    }
+
+    /// <summary>
+    /// <c>fleet</c>: every device of a fleet file sends its simulated history with its own
+    /// certificate (#79).
+    /// </summary>
+    private static async Task<int> FleetAsync(string[] args)
+    {
+        FleetOptions? options;
+        try
+        {
+            options = CommandLine.ParseFleet(args, Environment.GetEnvironmentVariable, FleetFile.ReferencePath, DeviceKeyFiles.DefaultDirectory);
+        }
+        catch (CommandLineException ex)
+        {
+            await Console.Error.WriteLineAsync(ex.Message);
+            await Console.Error.WriteLineAsync();
+            await Console.Error.WriteLineAsync(CommandLine.Usage);
+            return 2;
+        }
+
+        if (options is null)
+        {
+            Console.WriteLine(CommandLine.Usage);
+            return 0;
+        }
+
+        using var cancellation = new CancellationTokenSource();
+        Console.CancelKeyPress += (_, eventArgs) =>
+        {
+            eventArgs.Cancel = true;
+            cancellation.Cancel();
+        };
+
+        try
+        {
+            return await new FleetRunner(options, Console.Out).RunAsync(cancellation.Token) == 0 ? 0 : 1;
+        }
+        catch (OperationCanceledException)
+        {
+            await Console.Error.WriteLineAsync("Stopped.");
+            return 0;
+        }
+        catch (Exception ex) when (ex is InvalidDataException or FileNotFoundException)
+        {
+            await Console.Error.WriteLineAsync($"{ex.GetType().Name}: {ex.Message}");
+            return 1;
+        }
     }
 
     /// <summary>

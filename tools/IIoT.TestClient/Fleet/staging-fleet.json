@@ -1,0 +1,28 @@
+{
+  "description": "The reference fleet (#79, ADR-011): twenty devices of four types at a few made-up sites. Each provisions itself through DPS with its own certificate; the certificates and keys stay in ~/.secrets/iiot. The sites are for people reading this file and are never sent: a static attribute belongs in the device twin.",
+  "devices": [
+    { "id": "tank-000001", "profile": "tank", "site": "North fuel station: diesel" },
+    { "id": "tank-000002", "profile": "tank", "site": "North fuel station: petrol" },
+    { "id": "tank-000003", "profile": "tank", "site": "North fuel station: AdBlue" },
+    { "id": "tank-000004", "profile": "tank", "site": "South fuel station: diesel" },
+    { "id": "tank-000005", "profile": "tank", "site": "South fuel station: AdBlue" },
+    { "id": "tank-000006", "profile": "tank", "site": "Truck wash: fresh water buffer" },
+    { "id": "tank-000007", "profile": "tank", "site": "Depot: heating oil" },
+
+    { "id": "charger-000001", "profile": "charger", "site": "North fuel station: bay 1" },
+    { "id": "charger-000002", "profile": "charger", "site": "North fuel station: bay 2" },
+    { "id": "charger-000003", "profile": "charger", "site": "South fuel station: bay 1" },
+    { "id": "charger-000004", "profile": "charger", "site": "Depot car park" },
+    { "id": "charger-000005", "profile": "charger", "site": "Truck wash: staff parking" },
+
+    { "id": "wash-000001", "profile": "car-wash", "site": "North car wash: tunnel" },
+    { "id": "wash-000002", "profile": "car-wash", "site": "North car wash: self-service bays" },
+    { "id": "wash-000003", "profile": "car-wash", "site": "South car wash: tunnel" },
+    { "id": "wash-000004", "profile": "car-wash", "site": "Truck wash" },
+
+    { "id": "separator-000001", "profile": "oil-separator", "site": "North car wash" },
+    { "id": "separator-000002", "profile": "oil-separator", "site": "North fuel station forecourt" },
+    { "id": "separator-000003", "profile": "oil-separator", "site": "South car wash" },
+    { "id": "separator-000004", "profile": "oil-separator", "site": "Truck wash" }
+  ]
+}

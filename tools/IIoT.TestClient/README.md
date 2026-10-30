@@ -286,6 +286,51 @@ What happens on the wire:
 
 ---
 
+## A simulated fleet
+
+The reference fleet ([#79](https://github.com/asnielsen789/IIoT-platform/issues/79),
+[ADR-011](../../docs/adr/adr-011-multi-type-telemetry.md)) is twenty devices of four types, in
+[`Fleet/staging-fleet.json`](Fleet/staging-fleet.json):
+
+| Profile | Devices | What it sends |
+|---|---|---|
+| `tank` | `tank-000001` … `tank-000007` | `level`: drains with use, faster by day, and is refilled by a delivery |
+| `charger` | `charger-000001` … `charger-000005` | `energy` (kW.h, cumulative), `power` (kW), `count` of `sessions` (cumulative). Sessions start more often by day; each charger has a rating of 11, 22, 50 or 150 kW |
+| `car-wash` | `wash-000001` … `wash-000004` | `volume` of `water` (L) and `count` of `cycles`, both cumulative; the `level` of its `shampoo`, `wax` and `reclaim` tanks |
+| `oil-separator` | `separator-000001` … `separator-000004` | the `level` of its `oil` layer and its `sludge`, building up until a service empties it |
+
+The file holds no secrets: an ID, a profile and a site for people reading it. The site is never
+sent, since a static attribute belongs in the device twin.
+
+`fleet` sends each device's recent history, as an NB-IoT device that measures hourly and sends
+every four hours would have sent it: six buffered messages for a day, each with four samples and
+each sample with its own `measuredAt`. Sent now, it is backfill, which the platform accepts and
+keeps in measurement order:
+
+```
+dotnet run --project tools/IIoT.TestClient -- fleet --dry-run --device wash-000001
+dotnet run --project tools/IIoT.TestClient -- fleet --hub <hub>
+```
+
+- **One certificate per device**, found by its ID in `~/.secrets/iiot` (`--secrets` to change it):
+  `<id>.chain.pem` or `<id>.cert.pem`, and `<id>.key.pem`, as `create-csr` and
+  `IIoT.DeviceCa issue` write them. A device without them is skipped and said so; the others
+  still send. The hub must know each device already: provision it first
+  ([Zero-touch provisioning](#zero-touch-provisioning)).
+- **The same every run.** A device's simulation is seeded from its ID, so its values repeat for
+  the same window; only the message IDs are new, so a history sent twice is two histories.
+- **Within the contract.** A message carries at most 12 samples, 60 measurements for a car wash,
+  under the contract's 64. `--hours`, `--sample-every` and `--send-every` change the schedule
+  within that.
+- **On the platform's side**, chargers, car washes and oil separators need gateway contract v2
+  ([section 11](../../docs/gateway-contract.md#11-version-2)): on v1, their messages fail to
+  forward with the reason and are dead-lettered.
+
+Every device's day is tested offline against the platform's own validator: every message valid,
+four samples each, in order, sent after its samples, and no cumulative meter going down.
+
+---
+
 ## Options
 
 | Option | Env | Default | What it does |
