@@ -78,44 +78,65 @@ public sealed record DashboardSnapshot(
 
 /// <summary>One device as the overview shows it.</summary>
 /// <param name="DeviceId">The authenticated device ID.</param>
-/// <param name="Latest">Its newest reading by measurement time, or <c>null</c> if no batch holds a readable one.</param>
+/// <param name="Latest">Its newest reading by measurement time, of any series, or <c>null</c> if no batch holds one.</param>
 /// <param name="LatestBatch">The batch <paramref name="Latest"/> arrived in.</param>
 /// <param name="LastArrived">The device's most recently stored batch, which is not always the one holding its newest reading.</param>
 /// <param name="MessageCount">How many batches the mock holds from the device.</param>
+/// <param name="Series">The newest reading of each of its series, in <see cref="SeriesKey"/> order.</param>
 public sealed record DeviceSummary(
     string DeviceId,
     ReadingView? Latest,
     BatchView? LatestBatch,
     BatchView LastArrived,
-    int MessageCount)
+    int MessageCount,
+    IReadOnlyList<SeriesLatest> Series)
 {
+    /// <summary>What kind of device this looks like, from what it measures.</summary>
+    public DeviceType Type => DeviceType.Of(Series.Select(series => series.Key));
+
+    /// <summary>The least trustworthy quality among the latest reading of each series.</summary>
+    public string? WorstLatestQuality => BatchView.Worst(Series.Select(series => series.Reading.Quality));
+
     internal static DeviceSummary From(string deviceId, IReadOnlyList<BatchView> batches)
     {
         var latest = DashboardSnapshot.Latest(batches);
+
+        // The same rule as Latest, per series: newest by measurement time, then by arrival.
+        var series = batches
+            .SelectMany(batch => batch.Readings.Select((reading, index) => (Batch: batch, Reading: reading, Index: index)))
+            .GroupBy(entry => entry.Reading.Series)
+            .Select(group => group.MaxBy(entry => (entry.Reading.MeasuredAt ?? DateTimeOffset.MinValue, entry.Batch.Sequence, entry.Index)))
+            .Select(newest => new SeriesLatest(newest.Reading.Series, newest.Reading, newest.Batch))
+            .OrderBy(entry => entry.Key)
+            .ToList();
 
         return new DeviceSummary(
             deviceId,
             latest?.Reading,
             latest?.Batch,
             batches.MaxBy(batch => batch.Sequence)!,
-            batches.Count);
+            batches.Count,
+            series);
     }
 }
 
+/// <summary>The newest reading of one series, with the batch it arrived in.</summary>
+public sealed record SeriesLatest(SeriesKey Key, ReadingView Reading, BatchView Batch);
+
 /// <summary>
-/// What a device's page shows: its message history, its level trend and, when one is chosen, a
-/// message with its raw body.
+/// What a device's page shows: its message history, a chart per kind it measures and, when one is
+/// chosen, a message with its raw body.
 /// </summary>
 /// <param name="TakenAt">When the snapshot was taken, by the mock's clock.</param>
 /// <param name="Device">The device's summary, as on the overview.</param>
 /// <param name="NewestBatches">Its most recently stored batches, newest first, at most <see cref="MaxBatchesShown"/>.</param>
-/// <param name="Trend">Its newest readings, laid out for the level chart.</param>
+/// <param name="Trends">One chart per kind, in kind order, each with a line per sensor.</param>
 /// <param name="Selected">The message chosen for the modal, or <c>null</c>.</param>
 public sealed record DeviceSnapshot(
     DateTimeOffset TakenAt,
     DeviceSummary Device,
     IReadOnlyList<BatchView> NewestBatches,
-    LevelTrend Trend,
+    IReadOnlyList<Trend> Trends,
     SelectedMessage? Selected)
 {
     /// <summary>
@@ -124,7 +145,7 @@ public sealed record DeviceSnapshot(
     /// </summary>
     public const int MaxBatchesShown = 100;
 
-    /// <summary>The newest readings the level chart plots.</summary>
+    /// <summary>The newest readings a chart plots, per series.</summary>
     public const int MaxTrendReadings = 100;
 
     /// <summary>
@@ -155,19 +176,24 @@ public sealed record DeviceSnapshot(
 
         var views = stored.Select(BatchView.From).ToList();
 
-        var readings = views
+        // Per series, its newest readings with a readable time and value, oldest first; then one
+        // chart per kind. A kind's sensors share the chart and its scale, as they share the unit.
+        var trends = views
             .SelectMany(batch => batch.Readings)
             .Where(reading => reading.MeasuredAt is not null && reading.Number is not null)
-            .OrderByDescending(reading => reading.MeasuredAt)
-            .Take(MaxTrendReadings)
-            .Reverse()
+            .GroupBy(reading => reading.Series)
+            .SelectMany(series => series.OrderByDescending(reading => reading.MeasuredAt).Take(MaxTrendReadings).Reverse())
+            .GroupBy(reading => reading.Kind ?? "")
+            .OrderBy(kind => DashboardKinds.Order(kind.Key))
+            .ThenBy(kind => kind.Key, StringComparer.Ordinal)
+            .Select(kind => Trend.Create(kind.Key, kind.ToList()))
             .ToList();
 
         return new DeviceSnapshot(
             takenAt,
             DeviceSummary.From(deviceId, views),
             views.OrderByDescending(batch => batch.Sequence).Take(MaxBatchesShown).ToList(),
-            LevelTrend.Create(readings),
+            trends,
             selected);
     }
 }
@@ -200,9 +226,16 @@ public sealed record BatchView(
     /// The least trustworthy quality among the readings: <c>bad</c>, then <c>uncertain</c>, then
     /// <c>ok</c>; <c>null</c> when no reading has one.
     /// </summary>
-    public string? WorstQuality =>
-        Readings.Select(reading => reading.Quality).Where(quality => quality is not null)
-            .OrderByDescending(QualityRank).FirstOrDefault();
+    public string? WorstQuality => Worst(Readings.Select(reading => reading.Quality));
+
+    /// <summary>The batch's distinct series, in <see cref="SeriesKey"/> order.</summary>
+    public IReadOnlyList<SeriesKey> Series => Readings.Select(reading => reading.Series).Distinct().Order().ToList();
+
+    /// <summary>The body's <c>contractVersion</c>: which version of the gateway contract delivered it.</summary>
+    public int? ContractVersion { get; init; }
+
+    internal static string? Worst(IEnumerable<string?> qualities) =>
+        qualities.Where(quality => quality is not null).OrderByDescending(QualityRank).FirstOrDefault();
 
     /// <remarks>
     /// Every body in the store passed the schema, so each field is present and of its type. The
@@ -227,7 +260,14 @@ public sealed record BatchView(
             batch.IdempotencyKey,
             batch.Caller,
             StringProperty(body, "firmware"),
-            readings);
+            readings)
+        {
+            ContractVersion = body.ValueKind == JsonValueKind.Object &&
+                              body.TryGetProperty("contractVersion", out var version) &&
+                              version.TryGetInt32(out var number)
+                ? number
+                : null
+        };
     }
 
     internal static string? StringProperty(JsonElement element, string name) =>
@@ -255,6 +295,7 @@ public sealed record BatchView(
 /// <param name="Quality">The device's own assessment.</param>
 /// <param name="MeasuredAt"><paramref name="At"/> read as a timestamp, or <c>null</c> if it cannot be; used for ordering, the chart and display.</param>
 /// <param name="Number"><paramref name="Value"/> as a number, or <c>null</c>; used only to place the reading on the chart.</param>
+/// <param name="Sensor">Which of the device's sensors took it (v2, ADR-011), or <c>null</c>.</param>
 public sealed record ReadingView(
     string? Kind,
     string? Value,
@@ -262,8 +303,12 @@ public sealed record ReadingView(
     string? At,
     string? Quality,
     DateTimeOffset? MeasuredAt,
-    double? Number)
+    double? Number,
+    string? Sensor = null)
 {
+    /// <summary>The series the reading belongs to: its kind and sensor together.</summary>
+    public SeriesKey Series => new(Kind, Sensor);
+
     internal static ReadingView From(JsonElement reading)
     {
         var at = BatchView.StringProperty(reading, "at");
@@ -276,6 +321,7 @@ public sealed record ReadingView(
             at,
             BatchView.StringProperty(reading, "quality"),
             DateTimeOffset.TryParse(at, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal, out var measuredAt) ? measuredAt : null,
-            value is { } number && number.TryGetDouble(out var parsed) && double.IsFinite(parsed) ? parsed : null);
+            value is { } number && number.TryGetDouble(out var parsed) && double.IsFinite(parsed) ? parsed : null,
+            BatchView.StringProperty(reading, "sensor"));
     }
 }

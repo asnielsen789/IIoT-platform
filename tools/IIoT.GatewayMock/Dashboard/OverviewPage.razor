@@ -31,7 +31,7 @@
         <header>
             <Icon Name="tank" />
             <h2>Devices</h2>
-            <span class="note">Latest reading by measurement time</span>
+            <span class="note">Latest reading of each series, by measurement time</span>
         </header>
         @if (Snapshot.Devices.Count == 0)
         {
@@ -46,7 +46,7 @@
                 <thead>
                     <tr>
                         <th>Device</th>
-                        <th>Level</th>
+                        <th>Latest</th>
                         <th>Quality</th>
                         <th>Measured</th>
                         <th>Last message</th>
@@ -59,15 +59,34 @@
                     @foreach (var device in Snapshot.Devices)
                     {
                         <tr class="link">
-                            <td data-label="Device"><a class="row mono" href="@DashboardLinks.Device(device.DeviceId)">@device.DeviceId</a></td>
-                            <td data-label="Level">
-                                <span class="level">@DashboardFormat.Show(device.Latest?.Value) <small>@device.Latest?.Unit</small></span>
+                            <td data-label="Device">
+                                <span class="cell device">
+                                    <span class="type-icon"><Icon Name="@device.Type.Icon" Size="18" /></span>
+                                    <span>
+                                        <a class="row mono" href="@DashboardLinks.Device(device.DeviceId)">@device.DeviceId</a>
+                                        <span class="sub">@device.Type.Label</span>
+                                    </span>
+                                </span>
                             </td>
-                            <td data-label="Quality"><QualityBadge Quality="@device.Latest?.Quality" /></td>
-                            <td data-label="Measured" title="@device.Latest?.At">
+                            <td data-label="Latest">
+                                <span class="cell chips">
+                                    @foreach (var series in device.Series)
+                                    {
+                                        <span class="chip" title="@series.Reading.At">
+                                            @if (device.Series.Count > 1 || series.Key.Sensor is not null)
+                                            {
+                                                <span class="name">@series.Key.Label</span>
+                                            }
+                                            <span class="level">@DashboardFormat.Show(series.Reading.Value) <small>@DashboardKinds.Unit(series.Reading.Unit)</small></span>
+                                        </span>
+                                    }
+                                </span>
+                            </td>
+                            <td data-label="Quality"><QualityBadge Quality="@device.WorstLatestQuality" /></td>
+                            <td class="when" data-label="Measured" title="@device.Latest?.At">
                                 @(DashboardFormat.Ago(device.Latest?.At, Snapshot.TakenAt) ?? DashboardFormat.Show(device.Latest?.At))
                             </td>
-                            <td data-label="Last message" title="@DashboardFormat.Utc(device.LastArrived.StoredAt)">
+                            <td class="when" data-label="Last message" title="@DashboardFormat.Utc(device.LastArrived.StoredAt)">
                                 @DashboardFormat.Ago(device.LastArrived.StoredAt, Snapshot.TakenAt)
                             </td>
                             <td data-label="Messages">@device.MessageCount</td>

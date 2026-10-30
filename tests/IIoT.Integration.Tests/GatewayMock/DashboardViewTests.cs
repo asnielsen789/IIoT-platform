@@ -14,44 +14,131 @@ public class DashboardViewTests
     [Fact]
     public void Trend_SpansThePlot_HigherValuesHigherUp()
     {
-        var trend = LevelTrend.Create([Reading(1400, "2026-10-30T00:00:00Z"), Reading(1500, "2026-10-30T08:00:00Z")]);
+        var trend = Trend.Create("level", [Reading(1400, "2026-10-30T00:00:00Z"), Reading(1500, "2026-10-30T08:00:00Z")]);
+        var points = Assert.Single(trend.Lines).Points;
 
-        Assert.Equal(LevelTrend.PlotLeft, trend.Points[0].X);
-        Assert.Equal(LevelTrend.PlotRight, trend.Points[1].X);
+        Assert.Equal(Trend.PlotLeft, points[0].X);
+        Assert.Equal(Trend.PlotRight, points[1].X);
 
         // SVG's y grows downwards, so the higher level has the smaller y, and both stay inside.
-        Assert.True(trend.Points[1].Y < trend.Points[0].Y);
-        Assert.All(trend.Points, point => Assert.InRange(point.Y, LevelTrend.PlotTop, LevelTrend.PlotBottom));
+        Assert.True(points[1].Y < points[0].Y);
+        Assert.All(points, point => Assert.InRange(point.Y, Trend.PlotTop, Trend.PlotBottom));
 
         Assert.Equal(["1400", "1450", "1500"], trend.ValueTicks.Select(tick => tick.Label));
         Assert.Equal("mm", trend.Unit);
-        Assert.StartsWith(LevelTrend.Number(LevelTrend.PlotLeft) + "," + LevelTrend.Number(LevelTrend.PlotBottom), trend.Area, StringComparison.Ordinal);
+        Assert.StartsWith(Trend.Number(Trend.PlotLeft) + "," + Trend.Number(Trend.PlotBottom), trend.Lines[0].Area, StringComparison.Ordinal);
     }
 
     /// <summary>One reading, or readings that never change, have no range to scale by; they still land inside the plot.</summary>
     [Fact]
     public void Trend_OfOneReading_OrAFlatSeries_StaysInsideThePlot()
     {
-        var single = LevelTrend.Create([Reading(1432.5, "2026-10-30T06:00:00Z")]);
-        var point = Assert.Single(single.Points);
-        Assert.Equal((LevelTrend.PlotLeft + LevelTrend.PlotRight) / 2, point.X);
-        Assert.InRange(point.Y, LevelTrend.PlotTop, LevelTrend.PlotBottom);
-        Assert.Equal("", single.Area);
+        var single = Trend.Create("level", [Reading(1432.5, "2026-10-30T06:00:00Z")]);
+        var point = Assert.Single(Assert.Single(single.Lines).Points);
+        Assert.Equal((Trend.PlotLeft + Trend.PlotRight) / 2, point.X);
+        Assert.InRange(point.Y, Trend.PlotTop, Trend.PlotBottom);
+        Assert.Equal("", single.Lines[0].Area);
         Assert.Equal("1432.5", Assert.Single(single.ValueTicks).Label);
 
-        var flat = LevelTrend.Create([Reading(1000, "2026-10-30T00:00:00Z"), Reading(1000, "2026-10-30T04:00:00Z")]);
-        Assert.Equal(flat.Points[0].Y, flat.Points[1].Y);
-        Assert.InRange(flat.Points[0].Y, LevelTrend.PlotTop, LevelTrend.PlotBottom);
+        var flat = Trend.Create("level", [Reading(1000, "2026-10-30T00:00:00Z"), Reading(1000, "2026-10-30T04:00:00Z")]);
+        Assert.Equal(flat.Lines[0].Points[0].Y, flat.Lines[0].Points[1].Y);
+        Assert.InRange(flat.Lines[0].Points[0].Y, Trend.PlotTop, Trend.PlotBottom);
     }
 
     [Fact]
     public void Trend_WithoutReadings_IsEmpty()
     {
-        var trend = LevelTrend.Create([]);
+        var trend = Trend.Create("level", []);
 
-        Assert.Empty(trend.Points);
+        Assert.Empty(trend.Lines);
+        Assert.Equal(0, trend.PointCount);
         Assert.Null(trend.From);
-        Assert.Equal("", trend.Line);
+    }
+
+    /// <summary>
+    /// A kind's sensors share one chart and one scale (ADR-011): the device's only sensor first, then
+    /// by name, each in its own colour, and the same value at the same height whichever line it is on.
+    /// </summary>
+    [Fact]
+    public void Trend_OfSeveralSensors_SharesOneScale()
+    {
+        var trend = Trend.Create("level",
+        [
+            Reading(212, "2026-10-30T00:00:00Z", sensor: "sludge"),
+            Reading(38.5, "2026-10-30T00:00:00Z", sensor: "oil"),
+            Reading(212, "2026-10-30T04:00:00Z", sensor: "oil"),
+            Reading(40, "2026-10-30T04:00:00Z", sensor: "sludge")
+        ]);
+
+        Assert.Equal(["oil", "sludge"], trend.Lines.Select(line => line.Sensor));
+        Assert.Equal([0, 1], trend.Lines.Select(line => line.Colour));
+        Assert.Equal(4, trend.PointCount);
+        Assert.Equal(trend.Lines[1].Points[0].Y, trend.Lines[0].Points[1].Y);
+        Assert.Equal(["38.5", "125.3", "212"], trend.ValueTicks.Select(tick => tick.Label));
+    }
+
+    /// <summary>
+    /// A running total moves little against its size. Where the short labels would repeat, the full
+    /// numbers are shown, so the grid lines can still be told apart.
+    /// </summary>
+    [Fact]
+    public void Ticks_ThatWouldRepeat_AreWrittenInFull()
+    {
+        var trend = Trend.Create("count", [Reading(15872, "2026-10-30T00:00:00Z"), Reading(15937, "2026-10-30T08:00:00Z")]);
+
+        Assert.Equal(["15872", "15904.5", "15937"], trend.ValueTicks.Select(tick => tick.Label));
+    }
+
+    [Theory]
+    [InlineData(1432.5, "1432.5")]
+    [InlineData(9999, "9999")]
+    [InlineData(48211.37, "48.2k")]
+    [InlineData(1834567, "1.83M")]
+    public void Ticks_AreShortEnoughForTheirColumn(double value, string label)
+    {
+        Assert.Equal(label, Trend.Tick(value));
+    }
+
+    [Theory]
+    [InlineData("kW.h", "kWh")]
+    [InlineData("1", "")]
+    [InlineData("mm", "mm")]
+    [InlineData("L", "L")]
+    public void Units_ReadAsPeopleWriteThem(string ucum, string shown)
+    {
+        Assert.Equal(shown, DashboardKinds.Unit(ucum));
+    }
+
+    [Theory]
+    [InlineData("tank", "level")]
+    [InlineData("charger", "energy", "power", "count:sessions")]
+    [InlineData("wash", "volume:water", "count:cycles", "level:shampoo", "level:wax")]
+    [InlineData("separator", "level:oil", "level:sludge")]
+    [InlineData("other", "count")]
+    public void DeviceType_IsGuessedFromWhatItMeasures(string expected, params string[] series)
+    {
+        var keys = series.Select(entry => entry.Split(':') is [var kind, var sensor] ? new SeriesKey(kind, sensor) : new SeriesKey(entry, null));
+
+        var type = DeviceType.Of(keys);
+
+        Assert.Equal(expected switch
+        {
+            "tank" => DeviceType.Tank,
+            "charger" => DeviceType.Charger,
+            "wash" => DeviceType.CarWash,
+            "separator" => DeviceType.OilSeparator,
+            _ => DeviceType.Other
+        }, type);
+    }
+
+    [Fact]
+    public void Series_AreOrderedByKindThenSensor_AndLabelled()
+    {
+        SeriesKey[] keys = [new("count", "sessions"), new("level", "wax"), new("energy", null), new("level", null), new("level", "oil")];
+
+        Assert.Equal(
+            ["Level", "Level · oil", "Level · wax", "Energy", "Count · sessions"],
+            keys.Order().Select(key => key.Label));
     }
 
     /// <summary>
@@ -108,7 +195,7 @@ public class DashboardViewTests
         Assert.Equal("/dashboard/device?id=tank-1&message=a%26b%3D1", DashboardLinks.Message("tank-1", "a&b=1"));
     }
 
-    private static ReadingView Reading(double value, string at) =>
+    private static ReadingView Reading(double value, string at, string? sensor = null) =>
         new("level", value.ToString(System.Globalization.CultureInfo.InvariantCulture), "mm", at, "ok",
-            DateTimeOffset.Parse(at, System.Globalization.CultureInfo.InvariantCulture), value);
+            DateTimeOffset.Parse(at, System.Globalization.CultureInfo.InvariantCulture), value, sensor);
 }

@@ -1,0 +1,96 @@
+@*
+    One kind's chart, laid out by Trend on the server: a line per sensor, coloured by sensor. The
+    SVG is the plot alone, stretched to the width (preserveAspectRatio="none"); its labels are HTML
+    beside it, so they read the same on a phone and a wide screen. Lines keep their width when
+    stretched (non-scaling-stroke), and each reading is a zero-length stroke with round caps: a dot
+    that stays round however the plot is stretched, where a circle would become an ellipse.
+
+    The ring around a dot is the reading's quality: white for ok, amber for uncertain, black for
+    bad. Each dot carries a <title>, which browsers show as a tooltip, with the reading's sensor,
+    value, time and quality.
+*@
+@if (Trend.PointCount == 0)
+{
+    <p class="empty">No reading with a readable time and value yet.</p>
+}
+else
+{
+    <div class="chart">
+        <div class="plot">
+            <div class="yaxis" aria-hidden="true">
+                @foreach (var tick in Trend.ValueTicks)
+                {
+                    <span style="top: @Trend.Percent(tick.Y)">@tick.Label</span>
+                }
+            </div>
+            <svg viewBox="0 0 @Trend.Number(Trend.Width) @Trend.Number(Trend.Height)"
+                 preserveAspectRatio="none" role="img" aria-label="@AriaLabel">
+                @foreach (var tick in Trend.ValueTicks)
+                {
+                    <line class="grid" x1="0" x2="@Trend.Number(Trend.Width)"
+                          y1="@Trend.Number(tick.Y)" y2="@Trend.Number(tick.Y)" />
+                }
+
+                @if (Trend.Lines.Count == 1 && Trend.Lines[0].Points.Count > 1)
+                {
+                    <polygon class="area" points="@Trend.Lines[0].Area" />
+                }
+
+                @foreach (var line in Trend.Lines)
+                {
+                    @if (line.Points.Count > 1)
+                    {
+                        <polyline class="line s@(line.Colour)" points="@line.Line" />
+                    }
+
+                    @foreach (var point in line.Points)
+                    {
+                        <path class="halo @Quality(point.Reading.Quality)" d="@Dot(point)" />
+                        <path class="dot s@(line.Colour)" d="@Dot(point)">
+                            <title>@Describe(point.Reading)</title>
+                        </path>
+                    }
+                }
+            </svg>
+        </div>
+        <div class="xaxis" aria-hidden="true">
+            <span>@DashboardFormat.Axis(Trend.From!.Value)</span>
+            @if (Trend.To != Trend.From)
+            {
+                <span>@DashboardFormat.Axis(Trend.To!.Value)</span>
+            }
+        </div>
+    </div>
+    <div class="legend">
+        @if (Trend.Lines.Count > 1 || Trend.Lines[0].Sensor is not null)
+        {
+            @foreach (var line in Trend.Lines)
+            {
+                <span><i class="swatch s@(line.Colour)"></i>@(line.Sensor ?? DashboardKinds.Label(Trend.Kind))</span>
+            }
+        }
+        <span><i class="ring uncertain"></i>uncertain</span>
+        <span><i class="ring bad"></i>bad</span>
+        <span>@Trend.PointCount reading(s)@(Unit.Length == 0 ? "" : $", in {Unit}"), by measurement time@(DashboardKinds.IsCumulative(Trend.Kind) ? "; a running total" : "")</span>
+    </div>
+}
+
+@code {
+    [Parameter, EditorRequired]
+    public Trend Trend { get; set; } = default!;
+
+    private string Unit => DashboardKinds.Unit(Trend.Unit);
+
+    private string AriaLabel =>
+        $"{DashboardKinds.Label(Trend.Kind)} over time: {Trend.PointCount} reading(s) in {Trend.Lines.Count} series, " +
+        $"from {DashboardFormat.Utc(Trend.From!.Value)} to {DashboardFormat.Utc(Trend.To!.Value)}.";
+
+    /// <summary>A zero-length path at the point; its round caps draw the dot.</summary>
+    private static string Dot(TrendPoint point) => $"M{Trend.Number(point.X)},{Trend.Number(point.Y)}h0.01";
+
+    private static string Quality(string? quality) => quality is "uncertain" or "bad" ? quality : "ok";
+
+    private static string Describe(ReadingView reading) =>
+        $"{reading.Series.Label}: {DashboardFormat.Show(reading.Value)} {DashboardKinds.Unit(reading.Unit)} at " +
+        $"{DashboardFormat.Instant(reading.At)}, {DashboardFormat.Show(reading.Quality)}";
+}

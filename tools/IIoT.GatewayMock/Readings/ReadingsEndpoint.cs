@@ -5,19 +5,33 @@ using IIoT.GatewayMock.Authentication;
 namespace IIoT.GatewayMock.Readings;
 
 /// <summary>
-/// <c>POST /v1/readings</c> — the one endpoint of the downstream contract. See
-/// <c>docs/gateway-contract.md</c>.
+/// <c>POST /v1/readings</c> and <c>POST /v2/readings</c>, the downstream contract's two versions
+/// (ADR-011). They differ only in the schema a body is judged by; see <c>docs/gateway-contract.md</c>.
 /// </summary>
+/// <remarks>
+/// A message is one message whichever version delivered it: both store into the same
+/// <see cref="ReadingStore"/>, keyed by device and <c>Idempotency-Key</c>, so a message delivered on
+/// one version and replayed on the other is acknowledged and stored once.
+/// </remarks>
 internal static class ReadingsEndpoint
 {
     public const string Route = "/v1/readings";
+    public const string RouteV2 = "/v2/readings";
     public const string IdempotencyKeyHeader = "Idempotency-Key";
 
-    public static RouteHandlerBuilder MapReadings(this IEndpointRouteBuilder endpoints) =>
+    public static void MapReadings(this IEndpointRouteBuilder endpoints)
+    {
         // The fallback policy already requires a bearer-authenticated caller for every endpoint;
         // this says so again at the endpoint, where a reader looks first. Only the bearer scheme:
         // a dashboard session cookie never authenticates a delivery (see ApiAuthorization).
-        endpoints.MapPost(Route, AcceptAsync).RequireAuthorization(ApiAuthorization.Policy);
+        endpoints.MapPost(Route, (HttpRequest request, ClaimsPrincipal caller, ReadingStore store, TimeProvider timeProvider, ILoggerFactory loggerFactory, CancellationToken cancellationToken) =>
+                AcceptAsync(ReadingsSchema.V1, request, caller, store, timeProvider, loggerFactory, cancellationToken))
+            .RequireAuthorization(ApiAuthorization.Policy);
+
+        endpoints.MapPost(RouteV2, (HttpRequest request, ClaimsPrincipal caller, ReadingStore store, TimeProvider timeProvider, ILoggerFactory loggerFactory, CancellationToken cancellationToken) =>
+                AcceptAsync(ReadingsSchema.V2, request, caller, store, timeProvider, loggerFactory, cancellationToken))
+            .RequireAuthorization(ApiAuthorization.Policy);
+    }
 
     /// <remarks>
     /// The order of the checks follows what each one needs. Authentication has already happened
@@ -25,6 +39,7 @@ internal static class ReadingsEndpoint
     /// validated against the schema, and only a valid body is compared with its header.
     /// </remarks>
     private static async Task<IResult> AcceptAsync(
+        ReadingsSchema schema,
         HttpRequest request,
         ClaimsPrincipal caller,
         ReadingStore store,
@@ -61,7 +76,7 @@ internal static class ReadingsEndpoint
         {
             var body = document.RootElement;
 
-            var schemaError = ReadingsSchema.Validate(body);
+            var schemaError = schema.Validate(body);
             if (schemaError is not null)
             {
                 return Reject(logger, StatusCodes.Status400BadRequest, schemaError);
@@ -82,8 +97,8 @@ internal static class ReadingsEndpoint
             if (store.TryAdd(deviceId, idempotencyKey, body, subject, timeProvider.GetUtcNow()))
             {
                 logger.LogInformation(
-                    "Accepted message {MessageId} from {DeviceId} with {ReadingCount} reading(s), delivered by {Caller}",
-                    messageId, deviceId, readingCount, subject);
+                    "Accepted message {MessageId} from {DeviceId} with {ReadingCount} reading(s) on contract v{ContractVersion}, delivered by {Caller}",
+                    messageId, deviceId, readingCount, schema.Version, subject);
             }
             else
             {

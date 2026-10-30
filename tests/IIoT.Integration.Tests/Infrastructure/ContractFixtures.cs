@@ -15,11 +15,20 @@ public static class ContractFixtures
 
     public static string GatewayRoot { get; } = Path.Combine(AppContext.BaseDirectory, "Fixtures", "Gateway");
 
+    /// <summary>Gateway contract v2's examples, <c>docs/schemas/gateway/examples-v2/</c> (ADR-011).</summary>
+    public static string GatewayV2Root { get; } = Path.Combine(AppContext.BaseDirectory, "Fixtures", "GatewayV2");
+
     public static IEnumerable<object[]> ValidGateway() => Names(GatewayRoot, "valid-*.json");
 
     public static IEnumerable<object[]> InvalidGateway() => Names(GatewayRoot, "invalid-*.json");
 
     public static IEnumerable<object[]> ValidDevice() => Names(DeviceRoot, "valid-*.json");
+
+    public static IEnumerable<object[]> ValidGatewayV2() => Names(GatewayV2Root, "valid-*.json");
+
+    public static IEnumerable<object[]> InvalidGatewayV2() => Names(GatewayV2Root, "invalid-*.json");
+
+    public static string ReadGatewayV2(string fileName) => File.ReadAllText(Path.Combine(GatewayV2Root, fileName));
 
     /// <summary>
     /// The valid device examples gateway contract v1 can carry: every measurement a <c>level</c>

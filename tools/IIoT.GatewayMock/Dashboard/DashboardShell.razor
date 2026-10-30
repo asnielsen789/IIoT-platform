@@ -78,6 +78,14 @@
         .level small { font-weight: 500; color: var(--muted); }
         .sub { display: block; font-size: 0.78rem; color: var(--muted); }
         .cell { display: block; }
+        .cell.device { display: flex; align-items: center; gap: 0.6rem; }
+        .cell.device a.row, td.when { white-space: nowrap; }
+        .type-icon { width: 2rem; height: 2rem; border-radius: 0.55rem; background: var(--red-soft); color: var(--red); display: grid; place-items: center; flex: none; }
+        .chips { display: flex; flex-wrap: wrap; gap: 0.35rem 0.5rem; }
+        .chip { display: inline-flex; align-items: baseline; gap: 0.35rem; padding: 0.1rem 0.5rem; border: 1px solid var(--line); border-radius: 0.45rem; background: #fbfbfc; white-space: nowrap; }
+        .chip .name { font-size: 0.75rem; color: var(--muted); }
+        h1 .kind { font-size: 0.85rem; font-weight: 500; color: var(--muted); border: 1px solid var(--line); border-radius: 999px; padding: 0.1rem 0.6rem; background: var(--card); }
+        .tile .sub { display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap; }
         .muted { color: var(--muted); }
         .empty { padding: 2.5rem 1rem; text-align: center; color: var(--muted); }
         .empty svg { color: var(--red-line); }
@@ -98,14 +106,20 @@
         .plot svg { display: block; width: 100%; height: 100%; overflow: visible; }
         .chart .grid { stroke: var(--line); stroke-width: 1; vector-effect: non-scaling-stroke; }
         .chart .area { fill: var(--red-soft); }
-        .chart .line { fill: none; stroke: var(--red); stroke-width: 2.5; stroke-linejoin: round; vector-effect: non-scaling-stroke; }
+        .chart .line { fill: none; stroke-width: 2.5; stroke-linejoin: round; vector-effect: non-scaling-stroke; }
         .chart .halo, .chart .dot { fill: none; stroke-linecap: round; vector-effect: non-scaling-stroke; }
-        .chart .halo { stroke: #fff; stroke-width: 13; }
+        .chart .halo { stroke-width: 14; }
         .chart .dot { stroke-width: 9; }
-        .chart .dot.ok, .legend i.ok { stroke: var(--red); background: var(--red); }
-        .chart .dot.uncertain, .legend i.uncertain { stroke: #e0a100; background: #e0a100; }
-        .chart .dot.bad, .legend i.bad { stroke: var(--ink); background: var(--ink); }
-        .chart .dot.unknown { stroke: var(--muted); }
+        .chart .halo.ok { stroke: #fff; }
+        .chart .halo.uncertain, .legend i.ring.uncertain { stroke: #e0a100; border-color: #e0a100; }
+        .chart .halo.bad, .legend i.ring.bad { stroke: var(--ink); border-color: var(--ink); }
+        /* One colour per sensor on a chart: red first, then colours that stay apart from it. */
+        .chart .s0, .legend i.s0 { stroke: var(--red); background: var(--red); }
+        .chart .s1, .legend i.s1 { stroke: #546478; background: #546478; }
+        .chart .s2, .legend i.s2 { stroke: #e8758a; background: #e8758a; }
+        .chart .s3, .legend i.s3 { stroke: #8a6d3b; background: #8a6d3b; }
+        .chart .s4, .legend i.s4 { stroke: #2f7f86; background: #2f7f86; }
+        .legend i.ring { background: #fff; border: 3px solid; width: 0.75rem; height: 0.75rem; }
         .legend { display: flex; gap: 1rem; flex-wrap: wrap; font-size: 0.8rem; color: var(--muted); padding: 0.25rem 1rem 0.9rem; }
         .legend span { display: inline-flex; align-items: center; gap: 0.35rem; }
         .legend i { width: 0.65rem; height: 0.65rem; border-radius: 50%; display: inline-block; }
@@ -138,6 +152,7 @@
             table.stack td { display: flex; justify-content: space-between; align-items: center; gap: 1rem; padding: 0.2rem 0; border: 0; text-align: right; }
             table.stack td::before { content: attr(data-label); color: var(--muted); font-size: 0.78rem; text-align: left; }
             table.stack td.go { display: none; }
+            table.stack .chips { justify-content: flex-end; }
             .tile { padding: 0.75rem; gap: 0.6rem; }
             .tile .badge-icon { width: 2rem; height: 2rem; }
             .card > header { flex-wrap: wrap; }
