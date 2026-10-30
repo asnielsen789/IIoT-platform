@@ -117,6 +117,64 @@ public class ForwardingPipelineTests : IAsyncLifetime
     }
 
     /// <summary>
+    /// Gateway contract v2 end to end (ADR-011): with <c>GatewayV2:BaseAddress</c> set, every message
+    /// the platform accepts — tanks, chargers, car washes and oil separators alike — is delivered on
+    /// <c>/v2</c>, and the mock, judging by the v2 schema, accepts it.
+    /// </summary>
+    [Theory]
+    [MemberData(nameof(ContractFixtures.ValidDevice), MemberType = typeof(ContractFixtures))]
+    public async Task OnV2_EveryValidDeviceMessage_IsAcceptedByTheGateway(string fileName)
+    {
+        await ReplacePipelineAsync(settings =>
+        {
+            settings.Remove("GatewayV1:BaseAddress");
+            settings["GatewayV2:BaseAddress"] = "http://localhost/";
+        });
+        var payload = ContractFixtures.ReadDevice(fileName);
+        var device = DeviceIdOf(payload) ?? AuthenticatedDevice;
+
+        var outcome = await _pipeline.ProcessAsync(payload, device, EnqueuedAt);
+
+        Assert.Equal(ProcessingOutcome.Forwarded, outcome);
+        var stored = Assert.Single(_gateway.Store.Batches);
+        Assert.Equal(2, stored.Body.GetProperty("contractVersion").GetInt32());
+        Assert.Equal(device, stored.Body.GetProperty("deviceId").GetString());
+    }
+
+    /// <summary>
+    /// On v2 an oil separator's two series arrive apart: each reading keeps its sensor, the
+    /// readings their order.
+    /// </summary>
+    [Fact]
+    public async Task OnV2_SensorsArriveWithTheirReadings()
+    {
+        await ReplacePipelineAsync(settings => settings["GatewayV2:BaseAddress"] = "http://localhost/");
+
+        var outcome = await _pipeline.ProcessAsync(ContractFixtures.ReadDevice("valid-oil-separator.json"), "separator-000123", EnqueuedAt);
+
+        Assert.Equal(ProcessingOutcome.Forwarded, outcome);
+        var readings = Assert.Single(_gateway.Store.Batches).Body.GetProperty("readings").EnumerateArray().ToList();
+        Assert.Equal(["oil", "sludge", "oil", "sludge"], readings.Select(reading => reading.GetProperty("sensor").GetString()));
+    }
+
+    /// <summary>
+    /// On v1 a message v1 cannot carry fails to forward with the reason: sent nowhere, merged with
+    /// nothing, and not even a token requested (ADR-011). As a forwarding failure, the Function
+    /// dead-letters it like any other, so it can be delivered once the platform speaks v2.
+    /// </summary>
+    [Fact]
+    public async Task OnV1_AMessageNeedingV2_FailsWithTheReason()
+    {
+        var outcome = await _pipeline.ProcessAsync(ContractFixtures.ReadDevice("valid-ev-charger.json"), "charger-000123", EnqueuedAt);
+
+        Assert.Equal(ProcessingOutcome.ForwardingFailed, outcome);
+        Assert.Equal(0, _pipeline.Traffic.Attempts);
+        Assert.Equal(0, _issuer.TokenRequests);
+        Assert.Contains(_pipeline.Logs.Entries, entry =>
+            (entry.Message + entry.Exception?.Message).Contains("has no mapping in gateway contract v1", StringComparison.Ordinal));
+    }
+
+    /// <summary>
     /// A message at the corners of the device schema — a uint32 sequence number past 2³¹, lower-case
     /// RFC 3339 letters, a leap second — is delivered, and the gateway accepts what the platform made
     /// of the leap second. Written inline: it is not a contract example.
@@ -428,6 +486,13 @@ public class ForwardingPipelineTests : IAsyncLifetime
         await _pipeline.DisposeAsync();
         await _gateway.DisposeAsync();
         _issuer.Dispose();
+    }
+
+    /// <summary>The payload's own <c>deviceId</c>, which the platform checks against the authenticated one, or <c>null</c>.</summary>
+    private static string? DeviceIdOf(string payload)
+    {
+        using var document = System.Text.Json.JsonDocument.Parse(payload);
+        return document.RootElement.TryGetProperty("deviceId", out var deviceId) ? deviceId.GetString() : null;
     }
 
     private async Task ReplacePipelineAsync(Action<Dictionary<string, string?>> configure)

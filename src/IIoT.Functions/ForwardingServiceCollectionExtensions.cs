@@ -9,11 +9,17 @@ using Microsoft.Extensions.DependencyInjection.Extensions;
 namespace IIoT.Functions;
 
 /// <summary>
-/// Registers the processing pipeline: <see cref="TelemetryService"/>, the v1 gateway forwarder
-/// and the token provider it authenticates with.
+/// Registers the processing pipeline: <see cref="TelemetryService"/>, the gateway forwarder and
+/// the token provider it authenticates with.
 /// </summary>
 /// <remarks>
 /// <para>Kept out of <c>Program.cs</c> so the integration tests compose exactly these registrations.</para>
+/// <para>
+/// One gateway contract version is spoken (ADR-011): <see cref="GatewayV2Forwarder"/> when
+/// <c>GatewayV2:BaseAddress</c> is set, otherwise <see cref="GatewayV1Forwarder"/>. Each version
+/// has its own section of the same shape, <c>BaseAddress</c> and an optional <c>Resilience</c>, so
+/// moving to v2 is setting one address, and moving back is removing it.
+/// </para>
 /// <para>
 /// The lifetimes are the point, and they follow from <see cref="HttpClient"/>. A typed client is
 /// transient: each resolution gets a fresh <see cref="HttpClient"/> over a handler that
@@ -22,8 +28,8 @@ namespace IIoT.Functions;
 /// defeats that — it keeps one handler, and one DNS answer, for the life of the process.
 /// </para>
 /// <list type="bullet">
-/// <item><see cref="IDataForwarder"/> → <see cref="GatewayV1Forwarder"/>: a typed client, so
-/// transient.</item>
+/// <item><see cref="IDataForwarder"/> → <see cref="GatewayV1Forwarder"/> or
+/// <see cref="GatewayV2Forwarder"/>: a typed client, so transient.</item>
 /// <item><see cref="TelemetryService"/>: scoped — one per function invocation, which the isolated
 /// worker runs in its own scope. It was a singleton, which captured the first forwarder and its
 /// <see cref="HttpClient"/> for good; the forwarder itself was also registered a second time as a
@@ -49,6 +55,15 @@ public static class ForwardingServiceCollectionExtensions
     public const string GatewayResilienceSection = "GatewayV1:Resilience";
 
     /// <summary>
+    /// <c>GatewayV2__BaseAddress</c> as an app setting. Setting it makes the platform forward with
+    /// gateway contract v2 (ADR-011).
+    /// </summary>
+    public const string GatewayV2Section = "GatewayV2";
+
+    /// <summary>As <see cref="GatewayResilienceSection"/>, for v2. Optional.</summary>
+    public const string GatewayV2ResilienceSection = "GatewayV2:Resilience";
+
+    /// <summary>
     /// <c>GatewayAuth__TokenEndpoint</c>, <c>__ClientId</c>, <c>__ClientSecret</c>,
     /// <c>__Audience</c>. In Azure the secret is a Key Vault reference.
     /// </summary>
@@ -59,6 +74,7 @@ public static class ForwardingServiceCollectionExtensions
         services.TryAddSingleton(TimeProvider.System);
 
         services.AddOptions<GatewayV1Options>().Bind(configuration.GetSection(GatewaySection));
+        services.AddOptions<GatewayV2Options>().Bind(configuration.GetSection(GatewayV2Section));
         services.AddOptions<ClientCredentialsOptions>().Bind(configuration.GetSection(GatewayAuthSection));
 
         // The token endpoint gets the standard pipeline with its defaults: a token request is
@@ -71,8 +87,11 @@ public static class ForwardingServiceCollectionExtensions
         // errors and timeouts — with exponential backoff and jitter, honours Retry-After, and
         // never retries any other 4xx. It retries POST too, which is safe here only because every
         // request carries an Idempotency-Key the gateway deduplicates on.
-        var gatewayClient = services.AddHttpClient<IDataForwarder, GatewayV1Forwarder>(GatewayV1Forwarder.HttpClientName);
-        var resilience = configuration.GetSection(GatewayResilienceSection);
+        var useV2 = UsesGatewayV2(configuration);
+        var gatewayClient = useV2
+            ? services.AddHttpClient<IDataForwarder, GatewayV2Forwarder>(GatewayV2Forwarder.HttpClientName)
+            : services.AddHttpClient<IDataForwarder, GatewayV1Forwarder>(GatewayV1Forwarder.HttpClientName);
+        var resilience = configuration.GetSection(useV2 ? GatewayV2ResilienceSection : GatewayResilienceSection);
 
         // The section is optional, but the overload that binds it throws when the section is
         // absent — at startup, before any function is indexed.
@@ -85,4 +104,11 @@ public static class ForwardingServiceCollectionExtensions
 
         return services;
     }
+
+    /// <summary>
+    /// Whether the platform forwards with gateway contract v2: <c>GatewayV2:BaseAddress</c> is set.
+    /// Its value is checked per message, like v1's, so a wrong one fails forwarding with the reason.
+    /// </summary>
+    public static bool UsesGatewayV2(IConfiguration configuration) =>
+        !string.IsNullOrWhiteSpace(configuration.GetSection(GatewayV2Section)["BaseAddress"]);
 }

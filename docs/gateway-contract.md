@@ -230,8 +230,10 @@ produces from the device contract's examples must validate against the same sche
 
 ## 9. The platform's side
 
-The sender is `GatewayV1Forwarder` in `src/IIoT.Core/Forwarders/`, a typed HTTP client registered
-by `AddTelemetryForwarding` in `src/IIoT.Functions/`.
+The sender is `GatewayV1Forwarder`, or `GatewayV2Forwarder` for v2 (section 11), in
+`src/IIoT.Core/Forwarders/`: typed HTTP clients registered by `AddTelemetryForwarding` in
+`src/IIoT.Functions/`. Both are `GatewayForwarder`s, which own everything in the table below; a
+version adds only its path and its mapping.
 
 | Concern | Behaviour |
 |---------|-----------|
@@ -257,6 +259,8 @@ spell it:
 |---------|---------|-------|
 | `GatewayV1__BaseAddress` | `https://gateway.example.com/` | HTTPS. Requests go to `{BaseAddress}/v1/readings`. |
 | `GatewayV1__Resilience__…` | `GatewayV1__Resilience__Retry__MaxRetryAttempts=5` | Optional. Binds onto the standard resilience options. |
+| `GatewayV2__BaseAddress` | `https://gateway.example.com/` | **Setting it switches the platform to v2** (section 11): requests go to `{BaseAddress}/v2/readings`, and the `GatewayV1__` settings are not used. HTTPS. |
+| `GatewayV2__Resilience__…` | `GatewayV2__Resilience__Retry__MaxRetryAttempts=5` | Optional, as for v1. |
 | `GatewayAuth__TokenEndpoint` | `https://<tenant>.<region>.auth0.com/oauth/token` | HTTPS: the client secret is sent here. |
 | `GatewayAuth__ClientId` | | |
 | `GatewayAuth__ClientSecret` | `@Microsoft.KeyVault(SecretUri=…)` | **Secret.** A Key Vault reference in Azure; `local.settings.json` (gitignored) for local runs. Never in a committed file, never logged. |
@@ -307,10 +311,14 @@ handles a meter that is replaced or reset, where the total drops.
 **Series.** A device's series is its `kind` and `sensor` together. Readings of several series
 taken at once arrive in one batch, each with its own `at`.
 
-**Choosing a version.** The platform sends one version, chosen by configuration. With v1, a
-message that has a reading of another kind, or one that names its sensor, fails to forward with
-that reason; it is never sent without its other readings, and two series are never merged into
-one. Devices of the new types therefore go only to a receiver that speaks v2.
+**Choosing a version.** The platform sends one version, chosen by configuration: v2 when
+`GatewayV2__BaseAddress` is set, v1 otherwise (section 9, Configuration). Moving to v2 is setting
+that address; moving back is removing it. With v1, a message that has a reading of another kind,
+or one that names its sensor, fails to forward with that reason; it is never sent without its
+other readings, and two series are never merged into one. Like any forwarding failure it is
+dead-lettered, so it is delivered once the platform speaks v2 within the retry window, or waits in
+the poison queue for a replay (ADR-010). Devices of the new types therefore go only to a receiver
+that speaks v2.
 
 ### Examples (v2)
 
@@ -327,5 +335,6 @@ one. Devices of the new types therefore go only to a receiver that speaks v2.
 | `invalid-count-not-integer.json` | A counter of `15872.5` |
 | `invalid-sensor-format.json` | A `sensor` with capitals and a space |
 
-The schema is tested against these. The gateway mock's `/v2` and the platform's v2 forwarder are
-tested against the same files (#79, steps 2 and 3).
+The schema is tested against these, the gateway mock's `/v2` accepts and rejects them, and every
+body `GatewayV2Forwarder` produces from the device contract's examples validates against the same
+schema. End to end, every valid device example is delivered on `/v2` and accepted.
