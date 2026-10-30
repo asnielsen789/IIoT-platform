@@ -203,6 +203,18 @@ public class FleetTests
         Assert.DoesNotContain("tank-000001", output, StringComparison.Ordinal);
     }
 
+    /// <summary>For scripts: the IDs, one a line, and nothing else; no hub needed.</summary>
+    [Fact]
+    public async Task List_PrintsTheIdsOnly()
+    {
+        var options = CommandLine.ParseFleet(["fleet", "--list", "--device", "tank-000004", "--device", "wash-000003"], _ => null, FleetFile.ReferencePath, "s")!;
+        var log = new StringWriter();
+
+        await new FleetRunner(options, log, () => Now).RunAsync(CancellationToken.None);
+
+        Assert.Equal(["tank-000004", "wash-000003"], log.ToString().Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries));
+    }
+
     /// <summary>A device without a certificate and key is skipped and said so, not failed, and nothing connects.</summary>
     [Fact]
     public async Task Run_DevicesWithoutCredentials_AreSkipped()

@@ -117,6 +117,7 @@ public static class CommandLine
           --send-every <min>      How often it sends what it measured. Default 240.
           --device <id>           Only this device; repeatable. Default: every device in the file.
           --dry-run               Print each device's newest message, connect to nothing.
+          --list                  Print the devices' IDs, one a line, and nothing else.
           Each device connects with its own certificate and sends its history as buffered
           messages, tanks, chargers, car washes and oil separators alike (ADR-011). The hub must
           know the devices already: provision them first.
@@ -415,6 +416,7 @@ public static class CommandLine
         var schedule = FleetSchedule.Default;
         var devices = new List<string>();
         var dryRun = false;
+        var list = false;
 
         for (var i = 1; i < args.Length; i++)
         {
@@ -447,6 +449,9 @@ public static class CommandLine
                 case "--dry-run":
                     dryRun = true;
                     break;
+                case "--list":
+                    list = true;
+                    break;
                 default:
                     // Includes --cert and --device-key: each device's credential is found by its ID.
                     throw new CommandLineException($"{FleetCommand} does not take '{argument}'.");
@@ -457,8 +462,8 @@ public static class CommandLine
             throw new CommandLineException(problem);
 
         hub = Trimmed(hub) ?? Trimmed(environment(HubVariable));
-        if (hub is null && !dryRun)
-            throw new CommandLineException($"{FleetCommand} needs --hub (or {HubVariable}), unless it is a --dry-run.");
+        if (hub is null && !dryRun && !list)
+            throw new CommandLineException($"{FleetCommand} needs --hub (or {HubVariable}), unless it is a --dry-run or a --list.");
 
         return new FleetOptions(
             hub,
@@ -466,7 +471,8 @@ public static class CommandLine
             Trimmed(secrets) ?? defaultSecrets,
             schedule,
             devices,
-            dryRun);
+            dryRun,
+            list);
     }
 
     private static string? Trimmed(string? value) =>
