@@ -196,6 +196,64 @@ public sealed class X509CertificateAuthenticationTests : IDisposable
         Assert.Throws<FileNotFoundException>(() => X509CertificateAuthentication.Load(DeviceId, missing, missing, Now));
     }
 
+    [Fact]
+    public void LoadByCommonName_TakesTheDeviceIdFromTheCertificate()
+    {
+        // provision has no device ID to give: the CN is the registration ID and becomes the device ID.
+        WithFiles(_pki.ChainPem(_issued), _csr.PrivateKeyPem, (certificateFile, keyFile) =>
+        {
+            using var authentication = X509CertificateAuthentication.LoadByCommonName(certificateFile, keyFile, Now);
+
+            Assert.Equal(DeviceId, authentication.DeviceId);
+            Assert.Equal(_issued.Thumbprint, authentication.Certificate.Thumbprint);
+        });
+    }
+
+    [Fact]
+    public void LoadByCommonName_ACertificateWithoutACommonName_Fails()
+    {
+        using var key = ECDsa.Create(ECCurve.NamedCurves.nistP256);
+        using var certificate = new CertificateRequest("O=No Common Name", key, HashAlgorithmName.SHA256)
+            .CreateSelfSigned(Now.AddDays(-1), Now.AddDays(1));
+
+        WithFiles(certificate.ExportCertificatePem(), key.ExportPkcs8PrivateKeyPem(), (certificateFile, keyFile) =>
+        {
+            var exception = Assert.Throws<InvalidDataException>(
+                () => X509CertificateAuthentication.LoadByCommonName(certificateFile, keyFile, Now));
+
+            Assert.Contains("no single CN", exception.Message, StringComparison.Ordinal);
+        });
+    }
+
+    [Fact]
+    public void LoadByCommonName_StillChecksTheKeyAndTheValidity()
+    {
+        WithFiles(_pki.ChainPem(_issued), DeviceCsr.Create(DeviceId).PrivateKeyPem, (certificateFile, keyFile) =>
+            Assert.Throws<InvalidDataException>(() => X509CertificateAuthentication.LoadByCommonName(certificateFile, keyFile, Now)));
+
+        WithFiles(_pki.ChainPem(_issued), _csr.PrivateKeyPem, (certificateFile, keyFile) =>
+            Assert.Throws<InvalidDataException>(
+                () => X509CertificateAuthentication.LoadByCommonName(certificateFile, keyFile, Now.AddDays(3 * 365))));
+    }
+
+    private static void WithFiles(string certificatePem, string keyPem, Action<string, string> test)
+    {
+        var directory = Directory.CreateTempSubdirectory("iiot-testclient-").FullName;
+        try
+        {
+            var certificateFile = Path.Combine(directory, "device.chain.pem");
+            var keyFile = Path.Combine(directory, "device.key.pem");
+            File.WriteAllText(certificateFile, certificatePem);
+            File.WriteAllText(keyFile, keyPem);
+
+            test(certificateFile, keyFile);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
     private X509CertificateAuthentication FromPem(string certificatePem) =>
         X509CertificateAuthentication.FromPem(DeviceId, certificatePem, _csr.PrivateKeyPem, Now);
 

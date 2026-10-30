@@ -222,6 +222,64 @@ the devices file, a format of its own, and nothing in #11 needs it. Run one clie
 
 ---
 
+## Zero-touch provisioning
+
+What a device does on its first start when nobody has registered it
+([#48](https://github.com/asnielsen789/IIoT-platform/issues/48)): it registers itself with the
+Device Provisioning Service by its certificate, DPS creates its identity in the hub it assigns,
+and the device then connects to that hub. The device knows only the global endpoint, the ID
+scope and its certificate, and is told the hub. The service side, the CA registration and the
+enrollment group are
+[Zero-touch provisioning (one-time)](../../infra/README.md#zero-touch-provisioning-one-time) in
+the infrastructure README; the ID scope is the deployment output `provisioningIdScope`.
+
+1. **Make a key and a CSR**, as for any certificate device:
+
+   ```
+   dotnet run --project tools/IIoT.TestClient -- create-csr --device-id tank-000003
+   ```
+
+2. **Have the CA issue the certificate, without registering the device** (`--no-register`
+   instead of `--hub`). DPS registers it:
+
+   ```
+   dotnet run --project tools/IIoT.DeviceCa -- issue --vault <vault> --no-register \
+     --csr ~/.secrets/iiot/tank-000003.csr.pem --device-id tank-000003 --out ~/.secrets/iiot
+   ```
+
+3. **Provision, then send one message:**
+
+   ```
+   dotnet run --project tools/IIoT.TestClient -- provision --id-scope <id scope> \
+     --cert ~/.secrets/iiot/tank-000003.chain.pem --key ~/.secrets/iiot/tank-000003.key.pem
+   ```
+
+   The ID scope can come from `DPS_ID_SCOPE` instead. `--no-send` stops once DPS has assigned
+   the device, and `--fixture` picks the message. There is no `--hub` and no `--device-id`: DPS
+   names the hub, and the certificate's CN is the device ID.
+
+What happens on the wire:
+
+- **One connection to DPS**, MQTT 3.1.1 over TLS on port 8883 to
+  `global.azure-devices-provisioning.net`, with the device certificate presented as for IoT Hub.
+  The client ID is the registration ID, the certificate's CN; the username is
+  `<id scope>/registrations/<registration ID>/api-version=2019-03-31`; and the CONNECT has no
+  password field at all, since with X.509 DPS needs no SAS token
+  ([Use MQTT to communicate with Azure IoT DPS](https://learn.microsoft.com/azure/iot-dps/iot-mqtt-connect-to-iot-dps)).
+- **Subscribe, register, poll.** The client subscribes to `$dps/registrations/res/#`, publishes
+  `{"registrationId":"<id>"}` to `$dps/registrations/PUT/iotdps-register/?$rid=<n>`, and while
+  DPS answers `202`, polls `$dps/registrations/GET/iotdps-get-operationstatus/?$rid=<n>&operationId=<op>`
+  as often as DPS's `retry-after` says, which is clamped to 1–60 seconds. A `429` waits the same
+  way and sends the request again. Every request has a new `$rid`, and only the answer with that
+  `$rid` counts: a late answer to an earlier request is skipped.
+- **It ends** with an assignment, a refusal with DPS's status, error code and message, or after
+  20 requests or two minutes without either.
+- **Then the hub.** The client checks that DPS registered the device under its certificate's CN,
+  since IoT Hub accepts a CA-signed certificate only for that device ID, and connects to the
+  assigned hub exactly as `--hub <assigned hub> --device-id <CN> --cert … --key … --once` would.
+
+---
+
 ## Options
 
 | Option | Env | Default | What it does |
@@ -248,6 +306,17 @@ the devices file, a format of its own, and nothing in #11 needs it. Run one clie
 |---|---|---|---|
 | `--device-id <id>` | `DEVICE_ID` | — | The device the new key is for; the CSR asks for `CN=<id>`. |
 | `--out <dir>` | — | `~/.secrets/iiot` | Where `<id>.key.pem` and `<id>.csr.pem` are written. Created if missing. |
+
+`provision` takes these, and no others:
+
+| Option | Env | Default | What it does |
+|---|---|---|---|
+| `--id-scope <scope>` | `DPS_ID_SCOPE` | — | The DPS instance's ID scope. |
+| `--cert <file>` | — | — | The device certificate, as for a run. Its CN is the registration ID. |
+| `--key <file>` | — | — | The private key `create-csr` wrote for that certificate. |
+| `--dps-host <host>` | — | `global.azure-devices-provisioning.net` | The provisioning endpoint. |
+| `--fixture <selector>` | — | `valid` | The one message sent to the assigned hub. Not with `--no-send`. |
+| `--no-send` | — | — | Stop once DPS has assigned the device. |
 
 ### Fixture file
 
@@ -321,6 +390,13 @@ and asserts that the device certificate is presented alone, verifies against the
 followed by a CONNECT with the usual username and an empty password. Everything is generated at
 runtime; no key or certificate is committed.
 
+For `provision`, the register-and-poll flow is tested against a scripted DPS: the requests and
+their `$rid`s, polling with the operation ID, the waits, throttling, refusals, stale answers and
+giving up. One more test runs the whole registration over TLS on 127.0.0.1 through
+`DpsConnection`, MQTTnet and a local server that answers as DPS does, and asserts the
+certificate, the DPS username, the absence of a password field, the subscription and both
+requests.
+
 **No test reaches beyond loopback.** What only a live hub can show was checked against staging
 instead:
 
@@ -335,6 +411,9 @@ instead:
   - the message takes the route and is processed;
   - a disabled device is refused with `NotAuthorized`.
 - **Not yet verified:**
+  - `provision` against DPS: that DPS accepts the certificate through the enrollment group,
+    assigns the device and registers it in the hub, and that the device then connects
+    ([#48](https://github.com/asnielsen789/IIoT-platform/issues/48));
   - keep-alive and reconnection behaviour;
   - throughput and throttling with a concurrent fleet, which is the scale test
     ([#20](https://github.com/asnielsen789/IIoT-platform/issues/20)).
