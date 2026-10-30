@@ -1,0 +1,205 @@
+@*
+    The frame every dashboard page shares: the document, its stylesheet, the red top bar with the
+    signed-in user, and the footer. Static and server-rendered: no interactivity and no script.
+
+    Every value a page puts in it came from a request body or a token and is untrusted. Razor
+    HTML-encodes every @ expression, in text and in attribute values alike, so a device ID such as
+    <script>…</script> is shown as text, never run. The only way to bypass that is MarkupString,
+    which no dashboard component uses. The response's Content-Security-Policy forbids script as
+    well, in case an encoding gap is ever introduced; inline SVG and the inline stylesheet below
+    are what it allows.
+*@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    @if (RefreshSeconds is { } seconds)
+    {
+        <meta http-equiv="refresh" content="@seconds" />
+    }
+    <title>@Title · Gateway mock</title>
+    <style>
+        :root {
+            --red: #c8102e; --red-dark: #a10d25; --red-soft: #fdecef; --red-line: #f6c9d1;
+            --ink: #1d1d1f; --muted: #6b6f76; --line: #ececef; --page: #f7f7f8; --card: #ffffff;
+            --ok: #1d7a4b; --ok-soft: #e4f4ea; --warn: #8a5a00; --warn-soft: #fff1cc; --bad: #9b1c1c; --bad-soft: #fde1e1;
+            color-scheme: light;
+            font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+            line-height: 1.45; color: var(--ink);
+        }
+        * { box-sizing: border-box; }
+        body { margin: 0; background: var(--page); }
+        a { color: var(--red); }
+        svg.icon { flex: none; }
+
+        .topbar { background: var(--red); color: #fff; box-shadow: 0 1px 0 var(--red-dark); }
+        .topbar .inner { max-width: 72rem; margin: 0 auto; padding: 0.7rem 1rem; display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap; }
+        .brand { display: flex; align-items: center; gap: 0.6rem; color: #fff; text-decoration: none; font-weight: 650; font-size: 1.05rem; }
+        .brand .logo { width: 2rem; height: 2rem; border-radius: 0.55rem; background: #fff; color: var(--red); display: grid; place-items: center; }
+        .brand small { display: block; font-weight: 400; font-size: 0.78rem; opacity: 0.85; }
+        .user { margin-left: auto; display: flex; align-items: center; gap: 0.5rem; font-size: 0.88rem; }
+        .user a { color: #fff; border: 1px solid rgba(255, 255, 255, 0.6); border-radius: 999px; padding: 0.15rem 0.7rem; text-decoration: none; }
+        .user a:hover { background: rgba(255, 255, 255, 0.15); }
+
+        main { max-width: 72rem; margin: 0 auto; padding: 1.25rem 1rem 2rem; }
+        .crumbs { font-size: 0.85rem; color: var(--muted); display: flex; align-items: center; gap: 0.3rem; flex-wrap: wrap; }
+        .crumbs a { text-decoration: none; }
+        h1 { font-size: 1.45rem; margin: 0.3rem 0 1rem; display: flex; align-items: center; gap: 0.6rem; overflow-wrap: anywhere; }
+        h1 .mono { font-size: inherit; }
+        h1 svg { color: var(--red); }
+        h2 { font-size: 1rem; margin: 0; }
+
+        .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(9.5rem, 1fr)); gap: 0.75rem; margin-bottom: 1.25rem; }
+        .tile { background: var(--card); border: 1px solid var(--line); border-top: 3px solid var(--red); border-radius: 0.75rem; padding: 0.85rem 1rem; display: flex; gap: 0.75rem; align-items: center; min-width: 0; }
+        .tile .badge-icon { width: 2.3rem; height: 2.3rem; border-radius: 0.65rem; background: var(--red-soft); color: var(--red); display: grid; place-items: center; flex: none; }
+        .tile .label { font-size: 0.72rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; }
+        .tile .value { font-size: 1.2rem; font-weight: 650; overflow-wrap: anywhere; }
+        .tile .value small { font-size: 0.8rem; font-weight: 500; color: var(--muted); }
+
+        .card { background: var(--card); border: 1px solid var(--line); border-radius: 0.75rem; margin-bottom: 1.25rem; overflow: hidden; }
+        .card > header { padding: 0.8rem 1rem; border-bottom: 1px solid var(--line); display: flex; align-items: center; gap: 0.5rem; color: var(--red); }
+        .card > header h2 { color: var(--ink); }
+        .card > header .note { margin-left: auto; font-size: 0.8rem; color: var(--muted); }
+
+        table { border-collapse: collapse; width: 100%; font-size: 0.92rem; }
+        th { font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); font-weight: 600; text-align: left; padding: 0.6rem 1rem; background: #fbfbfc; border-bottom: 1px solid var(--line); white-space: nowrap; }
+        td { padding: 0.7rem 1rem; border-bottom: 1px solid var(--line); vertical-align: middle; }
+        tbody tr:last-child td { border-bottom: 0; }
+        tr.link { position: relative; }
+        tr.link:hover { background: var(--red-soft); }
+        a.row { color: var(--ink); font-weight: 600; text-decoration: none; }
+        a.row::after { content: ""; position: absolute; inset: 0; }
+        tr.link:hover a.row { color: var(--red); }
+        td.go { width: 2rem; color: var(--muted); text-align: right; }
+        tr.link:hover td.go { color: var(--red); }
+        .mono { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 0.84rem; overflow-wrap: anywhere; }
+        .level { font-variant-numeric: tabular-nums; font-weight: 650; white-space: nowrap; }
+        .level small { font-weight: 500; color: var(--muted); }
+        .sub { display: block; font-size: 0.78rem; color: var(--muted); }
+        .cell { display: block; }
+        .muted { color: var(--muted); }
+        .empty { padding: 2.5rem 1rem; text-align: center; color: var(--muted); }
+        .empty svg { color: var(--red-line); }
+
+        .badge { display: inline-flex; align-items: center; gap: 0.3rem; padding: 0.12rem 0.55rem 0.12rem 0.45rem; border-radius: 999px; font-size: 0.78rem; font-weight: 600; white-space: nowrap; }
+        .badge::before { content: ""; width: 0.45rem; height: 0.45rem; border-radius: 50%; background: currentColor; }
+        .badge.ok { background: var(--ok-soft); color: var(--ok); }
+        .badge.uncertain { background: var(--warn-soft); color: var(--warn); }
+        .badge.bad { background: var(--bad-soft); color: var(--bad); }
+        .badge.unknown { background: var(--line); color: var(--muted); }
+
+        .chart { padding: 1.25rem 1.25rem 0.5rem 0.5rem; }
+        .plot { display: grid; grid-template-columns: 3.75rem 1fr; height: 13rem; }
+        .yaxis { position: relative; }
+        .yaxis span, .xaxis span { font-size: 0.75rem; color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+        .yaxis span { position: absolute; right: 0.6rem; transform: translateY(-50%); }
+        .xaxis { display: flex; justify-content: space-between; margin-left: 3.75rem; padding-top: 0.5rem; }
+        .plot svg { display: block; width: 100%; height: 100%; overflow: visible; }
+        .chart .grid { stroke: var(--line); stroke-width: 1; vector-effect: non-scaling-stroke; }
+        .chart .area { fill: var(--red-soft); }
+        .chart .line { fill: none; stroke: var(--red); stroke-width: 2.5; stroke-linejoin: round; vector-effect: non-scaling-stroke; }
+        .chart .halo, .chart .dot { fill: none; stroke-linecap: round; vector-effect: non-scaling-stroke; }
+        .chart .halo { stroke: #fff; stroke-width: 13; }
+        .chart .dot { stroke-width: 9; }
+        .chart .dot.ok, .legend i.ok { stroke: var(--red); background: var(--red); }
+        .chart .dot.uncertain, .legend i.uncertain { stroke: #e0a100; background: #e0a100; }
+        .chart .dot.bad, .legend i.bad { stroke: var(--ink); background: var(--ink); }
+        .chart .dot.unknown { stroke: var(--muted); }
+        .legend { display: flex; gap: 1rem; flex-wrap: wrap; font-size: 0.8rem; color: var(--muted); padding: 0.25rem 1rem 0.9rem; }
+        .legend span { display: inline-flex; align-items: center; gap: 0.35rem; }
+        .legend i { width: 0.65rem; height: 0.65rem; border-radius: 50%; display: inline-block; }
+
+        .modal { position: fixed; inset: 0; z-index: 10; display: grid; place-items: center; padding: 1rem; }
+        .modal .backdrop { position: absolute; inset: 0; background: rgba(29, 29, 31, 0.55); }
+        .modal .dialog { position: relative; background: var(--card); border-radius: 0.9rem; width: 100%; max-width: 46rem; max-height: calc(100vh - 2rem); display: flex; flex-direction: column; overflow: hidden; box-shadow: 0 24px 60px rgba(0, 0, 0, 0.3); }
+        .modal .dialog > header { background: var(--red); color: #fff; padding: 0.8rem 1rem; display: flex; align-items: center; gap: 0.6rem; }
+        .modal .dialog > header h2 { color: #fff; overflow-wrap: anywhere; }
+        .modal .close { margin-left: auto; color: #fff; display: grid; place-items: center; width: 2rem; height: 2rem; border-radius: 50%; flex: none; }
+        .modal .close:hover { background: rgba(255, 255, 255, 0.18); }
+        .modal .content { padding: 1rem; overflow: auto; }
+        dl.meta { display: grid; grid-template-columns: max-content 1fr; gap: 0.4rem 1rem; margin: 0 0 1rem; font-size: 0.88rem; }
+        dl.meta dt { color: var(--muted); }
+        dl.meta dd { margin: 0; overflow-wrap: anywhere; }
+        pre.json { margin: 0; padding: 0.9rem 1rem; background: #fbfbfc; border: 1px solid var(--line); border-left: 3px solid var(--red); border-radius: 0.5rem; font: 0.82rem/1.55 ui-monospace, SFMono-Regular, Consolas, monospace; overflow: auto; white-space: pre; }
+        pre.json .key { color: var(--red-dark); }
+        pre.json .string { color: #0b6b3a; }
+        pre.json .number { color: #1f4fbf; }
+        pre.json .literal { color: #7a3fb0; }
+        pre.json .punct { color: var(--muted); }
+
+        footer { max-width: 72rem; margin: 0 auto; padding: 0 1rem 2rem; font-size: 0.8rem; color: var(--muted); }
+
+        @@media (max-width: 40rem) {
+            .user span { display: none; }
+            table.stack thead { display: none; }
+            table.stack tr { display: block; padding: 0.7rem 1rem; border-bottom: 1px solid var(--line); }
+            table.stack tbody tr:last-child { border-bottom: 0; }
+            table.stack td { display: flex; justify-content: space-between; align-items: center; gap: 1rem; padding: 0.2rem 0; border: 0; text-align: right; }
+            table.stack td::before { content: attr(data-label); color: var(--muted); font-size: 0.78rem; text-align: left; }
+            table.stack td.go { display: none; }
+            .tile { padding: 0.75rem; gap: 0.6rem; }
+            .tile .badge-icon { width: 2rem; height: 2rem; }
+            .card > header { flex-wrap: wrap; }
+            .card > header .note { margin-left: 0; flex-basis: 100%; }
+            dl.meta { grid-template-columns: 1fr; gap: 0.1rem; }
+            dl.meta dd { margin-bottom: 0.4rem; }
+            pre.json { white-space: pre-wrap; overflow-wrap: anywhere; }
+        }
+    </style>
+</head>
+<body>
+    <header class="topbar">
+        <div class="inner">
+            <a class="brand" href="@DashboardLinks.Overview">
+                <span class="logo"><Icon Name="tank" /></span>
+                <span>Gateway mock<small>Received readings</small></span>
+            </a>
+            <div class="user">
+                <Icon Name="user" Size="16" />
+                <span>@(SignedInAs ?? "(unnamed user)")</span>
+                <a href="@SignOutPath">Sign out</a>
+            </div>
+        </div>
+    </header>
+
+    <main>
+        @ChildContent
+    </main>
+
+    <footer>
+        Shown at @DashboardFormat.Utc(TakenAt)@(RefreshSeconds is { } every ? $"; refreshes every {every} seconds" : "").
+        Held in memory: a restart of the mock empties it.
+    </footer>
+
+    @Overlay
+</body>
+</html>
+
+@code {
+    /// <summary>The page's own part of the window title.</summary>
+    [Parameter, EditorRequired]
+    public string Title { get; set; } = default!;
+
+    /// <summary>The signed-in user's name, as the provider sent it.</summary>
+    [Parameter]
+    public string? SignedInAs { get; set; }
+
+    [Parameter, EditorRequired]
+    public string SignOutPath { get; set; } = default!;
+
+    /// <summary>When the page's data was read.</summary>
+    [Parameter, EditorRequired]
+    public DateTimeOffset TakenAt { get; set; }
+
+    /// <summary>How often the page reloads itself, or <c>null</c> for never, as while a message is open.</summary>
+    [Parameter]
+    public int? RefreshSeconds { get; set; }
+
+    [Parameter, EditorRequired]
+    public RenderFragment ChildContent { get; set; } = default!;
+
+    /// <summary>Rendered over the page, after it: the message view.</summary>
+    [Parameter]
+    public RenderFragment? Overlay { get; set; }
+}

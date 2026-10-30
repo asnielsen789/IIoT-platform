@@ -1,5 +1,6 @@
 using System.Net;
 using System.Web;
+using IIoT.GatewayMock.Dashboard;
 using IIoT.Integration.Tests.Infrastructure;
 
 namespace IIoT.Integration.Tests.GatewayMock;
@@ -59,8 +60,13 @@ public class GatewayMockDashboardTests : IClassFixture<DashboardFixture>
         Assert.Equal(TestOidcProvider.AuthorizationEndpoint, response.Headers.Location!.GetLeftPart(UriPartial.Path));
     }
 
+    /// <summary>
+    /// The path a viewer takes: the overview lists the device and links to it, the device's page
+    /// lists the message and links to it, and the message view shows the body as received, over
+    /// the device's page, without reloading itself.
+    /// </summary>
     [Fact]
-    public async Task Dashboard_SignedIn_ShowsTheStoredBatches()
+    public async Task Dashboard_SignedIn_LeadsFromDeviceToHistoryToMessage()
     {
         var messageId = GatewayRequests.NewMessageId();
         const string DeviceId = "tank-dashboard-1";
@@ -70,28 +76,64 @@ public class GatewayMockDashboardTests : IClassFixture<DashboardFixture>
         var (browser, _) = await _dashboard.SignInAsync();
         using (browser)
         {
-            using var response = await browser.GetAsync(DashboardFixture.DashboardPath);
-            var html = await response.Content.ReadAsStringAsync();
-
-            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-            Assert.Equal("text/html", response.Content.Headers.ContentType?.MediaType);
+            var overview = await GetPageAsync(browser, DashboardFixture.DashboardPath);
             Assert.Equal(redeemedBefore + 1, _dashboard.Provider.CodesRedeemed);
+            Assert.Contains(DeviceId, overview, StringComparison.Ordinal);
+            Assert.Contains("1432.5", overview, StringComparison.Ordinal);
+            Assert.Contains(TestOidcProvider.DefaultUserName, overview, StringComparison.Ordinal);
+            Assert.Contains($"href=\"{DashboardLinks.Device(DeviceId)}\"", overview, StringComparison.Ordinal);
+            Assert.Contains("http-equiv=\"refresh\"", overview, StringComparison.Ordinal);
 
-            Assert.Contains(DeviceId, html, StringComparison.Ordinal);
-            Assert.Contains(messageId, html, StringComparison.Ordinal);
-            Assert.Contains("2026-09-14T06:00:13Z", html, StringComparison.Ordinal);
-            Assert.Contains(TestTokenIssuer.Subject, html, StringComparison.Ordinal);
-            Assert.Contains("1432.5", html, StringComparison.Ordinal);
-            Assert.Contains(TestOidcProvider.DefaultUserName, html, StringComparison.Ordinal);
+            var device = await GetPageAsync(browser, DashboardLinks.Device(DeviceId));
+            Assert.Contains(messageId, device, StringComparison.Ordinal);
+            Assert.Contains("2026-09-14T06:00:13Z", device, StringComparison.Ordinal);
+            Assert.Contains("<svg", device, StringComparison.Ordinal);
+            Assert.Contains("http-equiv=\"refresh\"", device, StringComparison.Ordinal);
 
-            Assert.Contains("http-equiv=\"refresh\"", html, StringComparison.Ordinal);
+            // In an attribute, Razor writes the & between the parameters as &amp;.
+            var messageLink = DashboardLinks.Message(DeviceId, messageId);
+            Assert.Contains($"href=\"{messageLink.Replace("&", "&amp;", StringComparison.Ordinal)}\"", device, StringComparison.Ordinal);
+
+            var message = await GetPageAsync(browser, messageLink);
+            Assert.Contains("aria-modal=\"true\"", message, StringComparison.Ordinal);
+            Assert.Contains("&quot;contractVersion&quot;", message, StringComparison.Ordinal);
+            Assert.Contains(TestTokenIssuer.Subject, message, StringComparison.Ordinal);
+            Assert.Contains($"href=\"{DashboardLinks.Device(DeviceId)}\"", message, StringComparison.Ordinal);
+            Assert.DoesNotContain("http-equiv=\"refresh\"", message, StringComparison.Ordinal);
         }
     }
 
     /// <summary>
-    /// Everything on the page came from a request body or a token. A device ID, message ID,
-    /// firmware version or user name that is markup is shown as text, and no script reaches the
-    /// browser — and the response forbids script in any case.
+    /// An address from before a restart, or a mistyped one, is a 404 page with a way back, served
+    /// as carefully as the others.
+    /// </summary>
+    [Theory]
+    [InlineData("/dashboard/device")]
+    [InlineData("/dashboard/device?id=tank-nobody")]
+    [InlineData("/dashboard/device?id=tank-dashboard-404&message=no-such-message")]
+    public async Task Dashboard_UnknownDeviceOrMessage_IsNotFound(string path)
+    {
+        var messageId = GatewayRequests.NewMessageId();
+        await DeliverAsync(GatewayRequests.ValidBatch("tank-dashboard-404", messageId), messageId);
+
+        var (browser, _) = await _dashboard.SignInAsync();
+        using (browser)
+        {
+            using var response = await browser.GetAsync(path);
+            var html = await response.Content.ReadAsStringAsync();
+
+            Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+            Assert.Contains($"href=\"{DashboardFixture.DashboardPath}\"", html, StringComparison.Ordinal);
+            Assert.True(response.Headers.CacheControl?.NoStore, "the page must not be cached");
+            Assert.Contains("default-src 'none'", string.Join(' ', response.Headers.GetValues("Content-Security-Policy")), StringComparison.Ordinal);
+        }
+    }
+
+    /// <summary>
+    /// Everything on the pages came from a request body or a token. A device ID, message ID,
+    /// firmware version or user name that is markup is shown as text on every page, the raw body
+    /// in the message view included, and no script reaches the browser. The responses forbid
+    /// script in any case.
     /// </summary>
     [Fact]
     public async Task Dashboard_RendersUntrustedValuesAsText()
@@ -108,21 +150,28 @@ public class GatewayMockDashboardTests : IClassFixture<DashboardFixture>
         var (browser, _) = await _dashboard.SignInAsync(UserName);
         using (browser)
         {
-            using var response = await browser.GetAsync(DashboardFixture.DashboardPath);
-            var html = await response.Content.ReadAsStringAsync();
-
-            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-            Assert.DoesNotContain("<script", html, StringComparison.OrdinalIgnoreCase);
-            for (var i = 1; i <= 4; i++)
+            string[] paths = [DashboardFixture.DashboardPath, DashboardLinks.Device(DeviceId), DashboardLinks.Message(DeviceId, MessageId)];
+            foreach (var path in paths)
             {
-                Assert.Contains($"&lt;script&gt;alert({i})&lt;/script&gt;", html, StringComparison.Ordinal);
+                using var response = await browser.GetAsync(path);
+                var html = await response.Content.ReadAsStringAsync();
+
+                Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+                Assert.DoesNotContain("<script", html, StringComparison.OrdinalIgnoreCase);
+                Assert.Contains("&lt;script&gt;alert(1)&lt;/script&gt;", html, StringComparison.Ordinal);
+                Assert.Contains("&lt;script&gt;alert(4)&lt;/script&gt;", html, StringComparison.Ordinal);
+
+                var policy = string.Join(' ', response.Headers.GetValues("Content-Security-Policy"));
+                Assert.Contains("default-src 'none'", policy, StringComparison.Ordinal);
+                Assert.DoesNotContain("script-src", policy, StringComparison.Ordinal);
+                Assert.Equal("nosniff", Assert.Single(response.Headers.GetValues("X-Content-Type-Options")));
+                Assert.True(response.Headers.CacheControl?.NoStore, "the page must not be cached");
             }
 
-            var policy = string.Join(' ', response.Headers.GetValues("Content-Security-Policy"));
-            Assert.Contains("default-src 'none'", policy, StringComparison.Ordinal);
-            Assert.DoesNotContain("script-src", policy, StringComparison.Ordinal);
-            Assert.Equal("nosniff", Assert.Single(response.Headers.GetValues("X-Content-Type-Options")));
-            Assert.True(response.Headers.CacheControl?.NoStore, "the page must not be cached");
+            // The message ID and the firmware: in the history, and in the message view's body.
+            var message = await GetPageAsync(browser, DashboardLinks.Message(DeviceId, MessageId));
+            Assert.Contains("&lt;script&gt;alert(2)&lt;/script&gt;", message, StringComparison.Ordinal);
+            Assert.Contains("&lt;script&gt;alert(3)&lt;/script&gt;", message, StringComparison.Ordinal);
         }
     }
 
@@ -239,6 +288,14 @@ public class GatewayMockDashboardTests : IClassFixture<DashboardFixture>
             Assert.Equal(HttpStatusCode.Redirect, again.StatusCode);
             Assert.Equal(TestOidcProvider.AuthorizationEndpoint, again.Headers.Location!.GetLeftPart(UriPartial.Path));
         }
+    }
+
+    private static async Task<string> GetPageAsync(HttpClient browser, string path)
+    {
+        using var response = await browser.GetAsync(path);
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal("text/html", response.Content.Headers.ContentType?.MediaType);
+        return await response.Content.ReadAsStringAsync();
     }
 
     private async Task DeliverAsync(string body, string messageId)

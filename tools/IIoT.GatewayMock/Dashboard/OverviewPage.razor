@@ -1,0 +1,97 @@
+@*
+    The overview: totals, and one row per device that links to the device's page.
+*@
+<DashboardShell Title="Overview" SignedInAs="@SignedInAs" SignOutPath="@SignOutPath"
+                TakenAt="@Snapshot.TakenAt" RefreshSeconds="@RefreshSeconds">
+    <h1>Overview</h1>
+
+    <section class="tiles" aria-label="Totals">
+        <div class="tile">
+            <span class="badge-icon"><Icon Name="tank" /></span>
+            <div><div class="label">Devices</div><div class="value">@Snapshot.Devices.Count</div></div>
+        </div>
+        <div class="tile">
+            <span class="badge-icon"><Icon Name="message" /></span>
+            <div><div class="label">Messages</div><div class="value">@Snapshot.BatchCount</div></div>
+        </div>
+        <div class="tile">
+            <span class="badge-icon"><Icon Name="readings" /></span>
+            <div><div class="label">Readings</div><div class="value">@Snapshot.ReadingCount</div></div>
+        </div>
+        <div class="tile">
+            <span class="badge-icon"><Icon Name="clock" /></span>
+            <div>
+                <div class="label">Last message</div>
+                <div class="value">@(Snapshot.LastStoredAt is { } last ? DashboardFormat.Ago(last, Snapshot.TakenAt) : DashboardFormat.Absent)</div>
+            </div>
+        </div>
+    </section>
+
+    <section class="card">
+        <header>
+            <Icon Name="tank" />
+            <h2>Devices</h2>
+            <span class="note">Latest reading by measurement time</span>
+        </header>
+        @if (Snapshot.Devices.Count == 0)
+        {
+            <div class="empty">
+                <Icon Name="tank" Size="40" />
+                <p>No messages received since the mock started.</p>
+            </div>
+        }
+        else
+        {
+            <table class="stack">
+                <thead>
+                    <tr>
+                        <th>Device</th>
+                        <th>Level</th>
+                        <th>Quality</th>
+                        <th>Measured</th>
+                        <th>Last message</th>
+                        <th>Messages</th>
+                        <th>Firmware</th>
+                        <th><span class="muted" aria-hidden="true"></span></th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var device in Snapshot.Devices)
+                    {
+                        <tr class="link">
+                            <td data-label="Device"><a class="row mono" href="@DashboardLinks.Device(device.DeviceId)">@device.DeviceId</a></td>
+                            <td data-label="Level">
+                                <span class="level">@DashboardFormat.Show(device.Latest?.Value) <small>@device.Latest?.Unit</small></span>
+                            </td>
+                            <td data-label="Quality"><QualityBadge Quality="@device.Latest?.Quality" /></td>
+                            <td data-label="Measured" title="@device.Latest?.At">
+                                @(DashboardFormat.Ago(device.Latest?.At, Snapshot.TakenAt) ?? DashboardFormat.Show(device.Latest?.At))
+                            </td>
+                            <td data-label="Last message" title="@DashboardFormat.Utc(device.LastArrived.StoredAt)">
+                                @DashboardFormat.Ago(device.LastArrived.StoredAt, Snapshot.TakenAt)
+                            </td>
+                            <td data-label="Messages">@device.MessageCount</td>
+                            <td data-label="Firmware">@DashboardFormat.Show(device.LastArrived.Firmware)</td>
+                            <td class="go"><Icon Name="chevron" Size="18" /></td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        }
+    </section>
+</DashboardShell>
+
+@code {
+    [Parameter, EditorRequired]
+    public DashboardSnapshot Snapshot { get; set; } = default!;
+
+    /// <summary>The signed-in user's name, as the provider sent it.</summary>
+    [Parameter]
+    public string? SignedInAs { get; set; }
+
+    [Parameter, EditorRequired]
+    public int RefreshSeconds { get; set; }
+
+    [Parameter, EditorRequired]
+    public string SignOutPath { get; set; } = default!;
+}

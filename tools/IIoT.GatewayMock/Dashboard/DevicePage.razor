@@ -1,0 +1,170 @@
+@*
+    One device: its latest reading, its level trend and its message history, newest first. With a
+    message chosen, the same page is rendered with that message in a modal over it.
+
+    The modal needs no script. It is the page at its own address (?id=…&message=…), drawn over the
+    history; its close button and its backdrop are links back to the page without it. That
+    address does not reload itself, so an open message stays open.
+*@
+<DashboardShell Title="@Snapshot.Device.DeviceId" SignedInAs="@SignedInAs" SignOutPath="@SignOutPath"
+                TakenAt="@Snapshot.TakenAt" RefreshSeconds="@(Snapshot.Selected is null ? RefreshSeconds : null)">
+    <ChildContent>
+        <nav class="crumbs" aria-label="Breadcrumb">
+            <a href="@DashboardLinks.Overview">Overview</a>
+            <Icon Name="chevron" Size="14" />
+            <span class="mono">@Device.DeviceId</span>
+        </nav>
+        <h1><Icon Name="tank" Size="26" /><span class="mono">@Device.DeviceId</span></h1>
+
+        <section class="tiles" aria-label="Latest reading">
+            <div class="tile">
+                <span class="badge-icon"><Icon Name="readings" /></span>
+                <div>
+                    <div class="label">Latest level</div>
+                    <div class="value">@DashboardFormat.Show(Device.Latest?.Value) <small>@Device.Latest?.Unit</small></div>
+                </div>
+            </div>
+            <div class="tile">
+                <span class="badge-icon"><Icon Name="clock" /></span>
+                <div>
+                    <div class="label">Measured</div>
+                    <div class="value" title="@Device.Latest?.At">@(DashboardFormat.Ago(Device.Latest?.At, Snapshot.TakenAt) ?? DashboardFormat.Show(Device.Latest?.At))</div>
+                </div>
+            </div>
+            <div class="tile">
+                <span class="badge-icon"><Icon Name="message" /></span>
+                <div><div class="label">Messages</div><div class="value">@Device.MessageCount</div></div>
+            </div>
+            <div class="tile">
+                <span class="badge-icon"><Icon Name="chip" /></span>
+                <div><div class="label">Firmware</div><div class="value">@DashboardFormat.Show(Device.LastArrived.Firmware)</div></div>
+            </div>
+        </section>
+
+        <section class="card">
+            <header>
+                <Icon Name="chart" />
+                <h2>Level trend</h2>
+                <span class="note">Newest @DeviceSnapshot.MaxTrendReadings readings at most</span>
+            </header>
+            <LevelChart Trend="@Snapshot.Trend" />
+        </section>
+
+        <section class="card">
+            <header>
+                <Icon Name="message" />
+                <h2>Message history</h2>
+                <span class="note">
+                    Newest first@(Device.MessageCount > Snapshot.NewestBatches.Count ? $"; the newest {Snapshot.NewestBatches.Count} of {Device.MessageCount}" : "").
+                    Open one to see what arrived.
+                </span>
+            </header>
+            <table class="stack">
+                <thead>
+                    <tr>
+                        <th>Received</th>
+                        <th>Message ID</th>
+                        <th>Readings</th>
+                        <th>Quality</th>
+                        <th>Firmware</th>
+                        <th><span class="muted" aria-hidden="true"></span></th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var batch in Snapshot.NewestBatches)
+                    {
+                        <tr class="link">
+                            @* Two-part cells are wrapped in one .cell, so they stay together when the table stacks. *@
+                            <td data-label="Received" title="@batch.ReceivedAt">
+                                <span class="cell">
+                                    <a class="row" href="@DashboardLinks.Message(batch.DeviceId, batch.MessageId)">@DashboardFormat.Instant(batch.ReceivedAt)</a>
+                                    <span class="sub">stored @DashboardFormat.Ago(batch.StoredAt, Snapshot.TakenAt)</span>
+                                </span>
+                            </td>
+                            <td data-label="Message ID"><span class="mono">@batch.MessageId</span></td>
+                            <td data-label="Readings">
+                                <span class="cell">
+                                    <span class="level">@batch.Readings.Count</span>
+                                    @if (batch.Readings.Count > 0)
+                                    {
+                                        <span class="sub">@Range(batch)</span>
+                                    }
+                                </span>
+                            </td>
+                            <td data-label="Quality"><QualityBadge Quality="@batch.WorstQuality" /></td>
+                            <td data-label="Firmware">@DashboardFormat.Show(batch.Firmware)</td>
+                            <td class="go"><Icon Name="chevron" Size="18" /></td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </section>
+    </ChildContent>
+
+    <Overlay>
+        @if (Snapshot.Selected is { } selected)
+        {
+            <div class="modal">
+                <a class="backdrop" href="@DashboardLinks.Device(Device.DeviceId)" aria-label="Close" tabindex="-1"></a>
+                <section class="dialog" role="dialog" aria-modal="true" aria-labelledby="message-title">
+                    <header>
+                        <Icon Name="code" />
+                        <h2 id="message-title">Message <span class="mono">@selected.Batch.MessageId</span></h2>
+                        <a class="close" href="@DashboardLinks.Device(Device.DeviceId)" aria-label="Close"><Icon Name="close" /></a>
+                    </header>
+                    <div class="content">
+                        <dl class="meta">
+                            <dt>Device</dt>
+                            <dd class="mono">@selected.Batch.DeviceId</dd>
+                            <dt>Received (platform)</dt>
+                            <dd title="@selected.Batch.ReceivedAt">@DashboardFormat.Instant(selected.Batch.ReceivedAt)</dd>
+                            <dt>Stored (mock)</dt>
+                            <dd>@DashboardFormat.Utc(selected.Batch.StoredAt)</dd>
+                            <dt>Idempotency-Key</dt>
+                            <dd class="mono">@selected.Batch.MessageId</dd>
+                            <dt>Delivered by</dt>
+                            <dd class="mono">@DashboardFormat.Show(selected.Batch.Caller)</dd>
+                        </dl>
+                        <pre class="json" aria-label="The body as received">@foreach (var token in selected.Json){<span class="@token.Kind">@token.Text</span>}</pre>
+                    </div>
+                </section>
+            </div>
+        }
+    </Overlay>
+</DashboardShell>
+
+@code {
+    [Parameter, EditorRequired]
+    public DeviceSnapshot Snapshot { get; set; } = default!;
+
+    /// <summary>The signed-in user's name, as the provider sent it.</summary>
+    [Parameter]
+    public string? SignedInAs { get; set; }
+
+    /// <summary>How often the page reloads itself while no message is open.</summary>
+    [Parameter, EditorRequired]
+    public int RefreshSeconds { get; set; }
+
+    [Parameter, EditorRequired]
+    public string SignOutPath { get; set; } = default!;
+
+    private DeviceSummary Device => Snapshot.Device;
+
+    /// <summary>The lowest to the highest value in the batch, or its one value.</summary>
+    private static string Range(BatchView batch)
+    {
+        var values = batch.Readings.Where(reading => reading.Number is not null).ToList();
+        if (values.Count == 0)
+        {
+            return "";
+        }
+
+        var low = values.MinBy(reading => reading.Number)!;
+        var high = values.MaxBy(reading => reading.Number)!;
+        var unit = low.Unit is null ? "" : " " + low.Unit;
+
+        return ReferenceEquals(low, high) || low.Value == high.Value
+            ? $"{low.Value}{unit}"
+            : $"{low.Value}–{high.Value}{unit}";
+    }
+}

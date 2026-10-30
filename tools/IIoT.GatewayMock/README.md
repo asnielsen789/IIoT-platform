@@ -91,20 +91,37 @@ mapped: `/dashboard` is a path like any other, and the mock is the API alone.
 
 ### What it shows
 
-- **The latest reading per device**: value and unit, quality, when it was measured (device
-  clock), when the platform received it, and the message it came in. "Latest" means latest by
-  measurement time, not by arrival, so a late backfill or a redelivered message never displaces
-  a newer reading.
-- **Every received batch, newest first** (the newest 100): when the mock stored it, its
-  `receivedAt`, the device, the `messageId` (which is also the `Idempotency-Key`), the
-  authenticated caller (the token's `sub`), the firmware and every reading. A replay is
-  acknowledged but not stored again, so it never appears twice.
+Three views, in red and white
+([#77](https://github.com/asnielsen789/IIoT-platform/issues/77)):
 
-The page refreshes itself every 10 seconds with `<meta http-equiv="refresh">`. It is rendered on
-the server, by a minimal-API endpoint that returns one Razor component, and it sends no script
-and no forms. Every value on it came from a request body or a token, so every value is
-HTML-encoded. The response also carries a `Content-Security-Policy` that forbids script, and
-`Cache-Control: no-store`.
+- **The overview** (`/dashboard`): totals (devices, messages, readings, the last message) and
+  one row per device: its latest level and quality, when that was measured, when its last
+  message arrived, its message count and its firmware. A row opens the device. "Latest" means
+  latest by measurement time, not by arrival, so a late backfill or a redelivered message never
+  displaces a newer reading.
+- **A device** (`/dashboard/device?id=<device>`): its latest reading, a chart of its level over
+  time (its newest 100 readings, by measurement time, coloured by quality), and its message
+  history, newest first (the newest 100): when the platform received each message, its
+  `messageId` (which is also the `Idempotency-Key`), its readings, its worst quality and its
+  firmware. A replay is acknowledged but not stored again, so it never appears twice.
+- **A message** (`&message=<messageId>` added to the device's address): a modal over the device's
+  page with the batch as the mock stored it, as indented, coloured JSON, and its metadata: when
+  the platform received it, when the mock stored it, its `Idempotency-Key`, and the authenticated
+  caller (the token's `sub`). Its close button and its backdrop are links back to the device.
+
+Device and message IDs are in the query string, escaped, because either may hold any character,
+`/` included. An address the mock no longer knows, from before a restart, is a 404 page with a
+link to the overview. Times are in UTC; a time that came in a body is shown formatted when it
+can be read, with the value as sent in a tooltip. On a narrow screen the tables become stacked
+rows.
+
+The overview and a device's page refresh themselves every 10 seconds with
+`<meta http-equiv="refresh">`; an open message does not, so it stays open. Everything is rendered
+on the server, by minimal-API endpoints that return Razor components, and the pages send no
+script and no forms. The modal is a page of its own, and the chart and icons are inline SVG,
+drawn from coordinates computed on the server. Every value on the pages came from a request body
+or a token, so every value is HTML-encoded, the JSON in the message view included. The responses
+also carry a `Content-Security-Policy` that forbids script, and `Cache-Control: no-store`.
 
 ### How sign-in works
 
@@ -154,7 +171,8 @@ All of the dashboard's paths are under `/dashboard`:
 
 | Path | What it is |
 |------|------------|
-| `/dashboard` | The page |
+| `/dashboard` | The overview |
+| `/dashboard/device?id=…[&message=…]` | A device, and optionally one of its messages |
 | `/dashboard/sign-out` | Sign-out |
 | `/dashboard/signin-oidc` | Where the provider returns after sign-in: the **callback URL** to register |
 | `/dashboard/signout-callback-oidc` | Where the provider returns after sign-out: the **logout URL** to register |
