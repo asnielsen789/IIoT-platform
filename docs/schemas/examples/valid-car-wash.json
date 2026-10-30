@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "messageId": "01J8F2K9QS4T7V0X3Z6B8N1M6B",
+  "deviceId": "wash-000123",
+  "sentAt": "2026-09-14T06:00:12Z",
+  "sequence": 3310,
+  "measurements": [
+    { "type": "volume", "value": 1834567, "unit": "L", "sensor": "water", "measuredAt": "2026-09-14T06:00:00Z" },
+    { "type": "count", "value": 15872, "unit": "1", "sensor": "cycles", "measuredAt": "2026-09-14T06:00:00Z" },
+    { "type": "level", "value": 412.0, "unit": "mm", "sensor": "shampoo", "measuredAt": "2026-09-14T06:00:00Z" },
+    { "type": "level", "value": 655.5, "unit": "mm", "sensor": "wax", "measuredAt": "2026-09-14T06:00:00Z" },
+    { "type": "level", "value": 1840.0, "unit": "mm", "sensor": "reclaim", "measuredAt": "2026-09-14T06:00:00Z", "quality": "uncertain" }
+  ],
+  "device": {
+    "firmware": "1.7.3"
+  }
+}

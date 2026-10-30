@@ -3,7 +3,10 @@ namespace IIoT.Core.Models;
 /// <summary>A single reading. See section 2 of <c>docs/mqtt-payload.md</c>.</summary>
 public sealed record Measurement
 {
-    /// <summary>Only <c>level</c> exists in v1. Extended additively.</summary>
+    /// <summary>
+    /// <c>level</c>, <c>energy</c>, <c>power</c>, <c>volume</c> or <c>count</c> (ADR-011). Extended
+    /// additively; the schema ties each type to its unit and value range.
+    /// </summary>
     public required string Type { get; init; }
 
     /// <summary>
@@ -12,8 +15,15 @@ public sealed record Measurement
     /// </summary>
     public required double Value { get; init; }
 
-    /// <summary>UCUM unit code. Only <c>mm</c> in v1.</summary>
+    /// <summary>UCUM unit code, fixed by <see cref="Type"/>: <c>mm</c>, <c>kW.h</c>, <c>kW</c>, <c>L</c> or <c>1</c>.</summary>
     public required string Unit { get; init; }
+
+    /// <summary>
+    /// Which of the device's sensors or meters took the measurement, where it has more than one of
+    /// a type, such as <c>oil</c> and <c>sludge</c> on an oil separator; <c>null</c> otherwise. A
+    /// device's series is its type and sensor together (ADR-011).
+    /// </summary>
+    public string? Sensor { get; init; }
 
     /// <summary>
     /// Time of measurement, not of transmission. This may lie far in the past for buffered

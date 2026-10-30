@@ -101,12 +101,13 @@ public class ForwardingPipelineTests : IAsyncLifetime
     }
 
     /// <summary>
-    /// The two contracts agree end to end: every message the platform accepts is delivered, and
-    /// the mock — judging by the published schema, not the platform's types — accepts it.
+    /// The two contracts agree end to end: every message of levels the platform accepts is
+    /// delivered over v1, and the mock — judging by the published schema, not the platform's
+    /// types — accepts it. The other types need contract v2 (ADR-011).
     /// </summary>
     [Theory]
-    [MemberData(nameof(ContractFixtures.ValidDevice), MemberType = typeof(ContractFixtures))]
-    public async Task EveryValidDeviceMessage_IsAcceptedByTheGateway(string fileName)
+    [MemberData(nameof(ContractFixtures.ValidDeviceForV1), MemberType = typeof(ContractFixtures))]
+    public async Task EveryValidLevelMessage_IsAcceptedByTheGateway(string fileName)
     {
         var outcome = await _pipeline.ProcessAsync(ContractFixtures.ReadDevice(fileName), AuthenticatedDevice, EnqueuedAt);
 

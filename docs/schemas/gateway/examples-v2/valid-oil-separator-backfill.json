@@ -1,0 +1,13 @@
+{
+  "contractVersion": 2,
+  "deviceId": "separator-000123",
+  "messageId": "01J8F2K9QS4T7V0X3Z6B8N1M6C",
+  "receivedAt": "2026-09-14T06:00:13.25+00:00",
+  "firmware": "1.0.4",
+  "readings": [
+    { "kind": "level", "value": 38.5, "unit": "mm", "sensor": "oil", "at": "2026-09-13T22:00:04+00:00", "quality": "ok" },
+    { "kind": "level", "value": 212.0, "unit": "mm", "sensor": "sludge", "at": "2026-09-13T22:00:04+00:00", "quality": "ok" },
+    { "kind": "level", "value": 39.0, "unit": "mm", "sensor": "oil", "at": "2026-09-14T06:00:04+00:00", "quality": "ok" },
+    { "kind": "level", "value": 212.5, "unit": "mm", "sensor": "sludge", "at": "2026-09-14T06:00:04+00:00", "quality": "ok" }
+  ]
+}

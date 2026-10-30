@@ -21,6 +21,18 @@ public static class ContractFixtures
 
     public static IEnumerable<object[]> ValidDevice() => Names(DeviceRoot, "valid-*.json");
 
+    /// <summary>
+    /// The valid device examples gateway contract v1 can carry: every measurement a <c>level</c>
+    /// without a <c>sensor</c>. The others need v2 (ADR-011).
+    /// </summary>
+    public static IEnumerable<object[]> ValidDeviceForV1() =>
+        ValidDevice().Where(name =>
+        {
+            using var document = System.Text.Json.JsonDocument.Parse(ReadDevice((string)name[0]));
+            return document.RootElement.GetProperty("measurements").EnumerateArray()
+                .All(measurement => measurement.GetProperty("type").GetString() == "level" && !measurement.TryGetProperty("sensor", out _));
+        });
+
     public static string ReadDevice(string fileName) => File.ReadAllText(Path.Combine(DeviceRoot, fileName));
 
     public static string ReadGateway(string fileName) => File.ReadAllText(Path.Combine(GatewayRoot, fileName));

@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 1,
+  "messageId": "01J8F2K9QS4T7V0X3Z6B8N1M6C",
+  "deviceId": "separator-000123",
+  "sentAt": "2026-09-14T06:00:12Z",
+  "sequence": 512,
+  "measurements": [
+    { "type": "level", "value": 38.5, "unit": "mm", "sensor": "oil", "measuredAt": "2026-09-13T22:00:04Z" },
+    { "type": "level", "value": 212.0, "unit": "mm", "sensor": "sludge", "measuredAt": "2026-09-13T22:00:04Z" },
+    { "type": "level", "value": 39.0, "unit": "mm", "sensor": "oil", "measuredAt": "2026-09-14T06:00:04Z" },
+    { "type": "level", "value": 212.5, "unit": "mm", "sensor": "sludge", "measuredAt": "2026-09-14T06:00:04Z" }
+  ],
+  "device": {
+    "firmware": "1.0.4",
+    "battery": { "value": 3.49, "unit": "V" },
+    "signal": { "rsrp": -121, "rsrq": -17 }
+  }
+}

@@ -83,18 +83,38 @@ devices/{deviceId}/messages/events/$.ct=application%2Fjson&$.ce=utf-8
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `type` | `"level"` | Yes | Only `level` in v1. |
-| `value` | number 0–20000 | Yes | **Raw** measured value. No conversion on the device. |
-| `unit` | `"mm"` | Yes | UCUM code. |
+| `type` | see the table below | Yes | What was measured. The type fixes the unit and the value range. |
+| `value` | number ≥ 0 | Yes | **Raw** measured value, in `unit`. No conversion on the device. |
+| `unit` | UCUM code | Yes | Fixed by `type`. |
+| `sensor` | string | No | Which of the device's sensors or meters took the measurement, where it has more than one of a type. Lowercase letters, digits and hyphens, at most 32 characters. |
 | `measuredAt` | RFC 3339 date-time | Yes | Time of measurement, not of transmission. See section 4. |
 | `quality` | `ok`/`uncertain`/`bad` | No | The device's own assessment. Defaults to `ok`. |
 
-Multiple elements occur on **buffered transmission** after a network outage. Each element
-carries its own `measuredAt`, so ordering and timing are preserved.
+**Types** ([ADR-011](adr/adr-011-multi-type-telemetry.md)):
 
-The upper bound of 20000 mm is a sanity check for the reference use case, not a
-per-installation limit. Validation against actual vessel geometry belongs wherever that
-geometry is registered.
+| `type` | `unit` | `value` | Meaning | Sent by, in the reference fleet |
+|--------|--------|---------|---------|--------------------------------|
+| `level` | `mm` | 0–20000 | A level | Tanks; car wash tanks; oil separators |
+| `energy` | `kW.h` | 0–10⁹ | **Cumulative** energy meter reading | EV charging stations |
+| `power` | `kW` | 0–1000 | Power at `measuredAt` | EV charging stations |
+| `volume` | `L` | 0–10¹² | **Cumulative** volume meter reading | Car washes (water) |
+| `count` | `1` | integer, 0–2⁵³−1 | **Cumulative** event counter | Charging sessions; wash cycles |
+
+The upper bounds are sanity checks, not per-installation limits. Validation against an actual
+vessel's geometry belongs wherever that geometry is registered.
+
+**Counters are totals, never deltas.** `energy`, `volume` and `count` carry the meter's reading
+itself. A lost message then costs nothing, because the next one carries the total; a resent one
+changes nothing; and consumption over any period is the difference between two readings.
+
+**`sensor` tells a device's series apart.** An oil separator measures its oil layer and its
+sludge (`oil`, `sludge`), and a car wash the levels of three tanks (`shampoo`, `wax`,
+`reclaim`). A device's series is its `type` and `sensor` together; a device with one sensor of a
+type leaves `sensor` out, as every tank does.
+
+Multiple elements occur on **buffered transmission** after a network outage, and on a device
+that reads several sensors at once. Each element carries its own `measuredAt`, so ordering and
+timing are preserved.
 
 ---
 
@@ -240,6 +260,13 @@ in the field for years.
 | `invalid-wrong-unit.json` | `cm` instead of `mm` |
 | `invalid-negative-level.json` | Negative measured value |
 | `invalid-empty-measurements.json` | Empty `measurements` array |
+| `valid-ev-charger.json` | An EV charger: `energy`, `power` and a `count` of sessions |
+| `valid-car-wash.json` | A car wash: water `volume`, a `count` of cycles, three tank levels told apart by `sensor` |
+| `valid-oil-separator.json` | Oil and sludge levels, buffered: two readings of each sensor |
+| `invalid-unit-for-type.json` | `energy` in `mm`: the type fixes the unit |
+| `invalid-count-not-integer.json` | A counter of `1873.5` |
+| `invalid-sensor-format.json` | A `sensor` with capitals and a space |
+| `invalid-power-out-of-range.json` | `power` of 5000 kW, above the sanity bound |
 
 These fixtures are **shared test ground**: the test client sends them, and validation checks
 against them. The filename prefix — `valid` / `invalid` — states the expected outcome.

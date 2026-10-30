@@ -300,7 +300,7 @@ What happens on the wire:
 | `--interval <seconds>` | — | `60` | Delay between messages, per device. |
 | `--count <n>` | — | unbounded | Messages per device, then stop. |
 | `--once` | — | — | Shorthand for `--count 1`. |
-| `--fixture <selector>` | — | `valid` | `all`, `valid`, `invalid`, or a fixture name such as `valid-buffered-backfill` (the `.json` is optional). An unknown name is an error, never an empty run. |
+| `--fixture <selector>` | — | `valid` | `all`, `valid`, `invalid`, or a fixture name such as `valid-buffered-backfill` (the `.json` is optional). An unknown name is an error, never an empty run. `valid` includes the examples of the device types beyond the tank (ADR-011), which a platform forwarding with gateway contract v1 refuses to forward: pick a level fixture by name there. |
 | `--no-mutate` | — | — | Send fixture bytes verbatim. See below. |
 | `--sas-lifetime <minutes>` | — | `60` | SAS token validity. Not with `--cert`. |
 | `--dry-run` | — | — | Build and print messages; connect to nothing. With `--cert`, also loads and checks the certificate and key. |

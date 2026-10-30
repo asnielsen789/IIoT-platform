@@ -1,0 +1,10 @@
+{
+  "contractVersion": 2,
+  "deviceId": "wash-000123",
+  "messageId": "01J8F2K9QS4T7V0X3Z6B8N1M6M",
+  "receivedAt": "2026-09-14T06:00:13.25+00:00",
+  "firmware": "1.7.3",
+  "readings": [
+    { "kind": "level", "value": 412.0, "unit": "mm", "sensor": "Shampoo Tank", "at": "2026-09-14T06:00:00+00:00", "quality": "ok" }
+  ]
+}

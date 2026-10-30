@@ -1,7 +1,9 @@
-# Gateway contract (v1)
+# Gateway contract (v1 and v2)
 
-> Normative schema: [`schemas/gateway/readings-v1.schema.json`](schemas/gateway/readings-v1.schema.json)
-> Examples: [`schemas/gateway/examples/`](schemas/gateway/examples/)
+> Normative schemas: [`schemas/gateway/readings-v1.schema.json`](schemas/gateway/readings-v1.schema.json),
+> [`schemas/gateway/readings-v2.schema.json`](schemas/gateway/readings-v2.schema.json) (section 11)
+> Examples: [`schemas/gateway/examples/`](schemas/gateway/examples/) (v1),
+> [`schemas/gateway/examples-v2/`](schemas/gateway/examples-v2/) (v2)
 > Reference receiver: [`tools/IIoT.GatewayMock`](../tools/IIoT.GatewayMock/README.md)
 
 This document is the contract between the **IIoT platform** and a **downstream gateway**: the
@@ -77,7 +79,7 @@ in-process tests use.
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `kind` | `"level"` | Yes | What was measured. Only `level` in v1. |
+| `kind` | `"level"` | Yes | What was measured. Only `level` in v1; the other kinds are v2's (section 11). |
 | `value` | number | Yes | The **raw** measured value, in `unit`. The platform converts nothing (ADR-004). |
 | `unit` | `"mm"` | Yes | UCUM code. |
 | `at` | ISO 8601 | Yes | Time of measurement by the **device** clock, offset as the device sent it. |
@@ -277,3 +279,53 @@ setting named in the log.
 | The client secret in Key Vault, `GatewayAuth__ClientSecret` as a Key Vault reference, and the other settings in the infrastructure templates | [#12](https://github.com/asnielsen789/IIoT-platform/issues/12) |
 | The gateway mock configured with the tenant as its `Authority` | [#12](https://github.com/asnielsen789/IIoT-platform/issues/12) |
 | A gateway the deployed Function can reach over HTTPS — the mock hosted somewhere, or exposed through a tunnel — and a way to see what it received beyond its log | [#15](https://github.com/asnielsen789/IIoT-platform/issues/15) |
+
+---
+
+## 11. Version 2
+
+Version 2 carries the device types beyond the tank
+([ADR-011](adr/adr-011-multi-type-telemetry.md),
+[#79](https://github.com/asnielsen789/IIoT-platform/issues/79)). It is **version 1 with more
+reading kinds and an optional `sensor`**, at its own path and served alongside `/v1`. Everything
+not listed here is as in sections 2 to 9: one request per device message, the `Idempotency-Key`,
+authentication, responses, and the receiver obligations.
+
+| | v1 | v2 |
+|---|---|---|
+| Path | `POST /v1/readings` | `POST /v2/readings` |
+| `contractVersion` | `1` | `2` |
+| `readings[].kind` | `level` | `level`, `energy`, `power`, `volume`, `count` |
+| `readings[].unit` | `mm` | fixed by the kind: `mm`, `kW.h`, `kW`, `L`, `1` |
+| `readings[].sensor` | — | optional: which of the device's sensors or meters, exactly as the device named it |
+| A `count` value | — | an integer |
+
+**Cumulative kinds.** `energy`, `volume` and `count` are meter readings, not consumption. A
+receiver derives consumption from the difference between two readings of the same series, and
+handles a meter that is replaced or reset, where the total drops.
+
+**Series.** A device's series is its `kind` and `sensor` together. Readings of several series
+taken at once arrive in one batch, each with its own `at`.
+
+**Choosing a version.** The platform sends one version, chosen by configuration. With v1, a
+message that has a reading of another kind, or one that names its sensor, fails to forward with
+that reason; it is never sent without its other readings, and two series are never merged into
+one. Devices of the new types therefore go only to a receiver that speaks v2.
+
+### Examples (v2)
+
+| File | Covers |
+|------|--------|
+| `valid-tank-level.json` | A level without a sensor: v1's one reading, under v2 |
+| `valid-ev-charger.json` | `energy`, `power` and a `count` of sessions |
+| `valid-car-wash.json` | `volume`, a `count` of cycles, and three tank levels told apart by `sensor` |
+| `valid-oil-separator-backfill.json` | Two sensors, two readings each, in one batch |
+| `valid-unknown-fields.json` | Forward compatibility, unknown fields accepted |
+| `invalid-contract-version-1.json` | `contractVersion: 1` on `/v2` |
+| `invalid-unknown-kind.json` | A kind v2 does not define |
+| `invalid-unit-for-kind.json` | `energy` in `kW`: the kind fixes the unit |
+| `invalid-count-not-integer.json` | A counter of `15872.5` |
+| `invalid-sensor-format.json` | A `sensor` with capitals and a space |
+
+The schema is tested against these. The gateway mock's `/v2` and the platform's v2 forwarder are
+tested against the same files (#79, steps 2 and 3).

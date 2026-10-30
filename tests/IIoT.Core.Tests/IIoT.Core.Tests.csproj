@@ -31,8 +31,13 @@
       The gateway contract's schema, so every body the forwarder produces can be checked against
       the published document - the same file the gateway mock enforces on the receiving side.
     -->
-    <Content Include="..\..\docs\schemas\gateway\readings-v1.schema.json"
+    <Content Include="..\..\docs\schemas\gateway\readings-v1.schema.json;..\..\docs\schemas\gateway\readings-v2.schema.json"
       Link="Fixtures\Gateway\%(Filename)%(Extension)"
+      CopyToOutputDirectory="PreserveNewest" />
+
+    <!-- Gateway contract v2's examples (ADR-011), checked against its schema. -->
+    <Content Include="..\..\docs\schemas\gateway\examples-v2\*.json"
+      Link="Fixtures\GatewayV2\%(Filename)%(Extension)"
       CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 

@@ -1,0 +1,10 @@
+{
+  "contractVersion": 2,
+  "deviceId": "wash-000123",
+  "messageId": "01J8F2K9QS4T7V0X3Z6B8N1M6L",
+  "receivedAt": "2026-09-14T06:00:13.25+00:00",
+  "firmware": "1.7.3",
+  "readings": [
+    { "kind": "count", "value": 15872.5, "unit": "1", "sensor": "cycles", "at": "2026-09-14T06:00:00+00:00", "quality": "ok" }
+  ]
+}

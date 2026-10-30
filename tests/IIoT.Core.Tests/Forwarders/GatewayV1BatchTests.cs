@@ -28,16 +28,17 @@ public class GatewayV1BatchTests
     public void SchemaAndFixtures_AreCopiedToTheOutputDirectory()
     {
         Assert.True(File.Exists(GatewaySchema.FilePath), $"the gateway schema was not copied to '{GatewaySchema.FilePath}'");
-        Assert.True(ContractFixtures.Valid().Count() >= 4, "valid device fixtures were not copied to the output directory");
+        Assert.True(ContractFixtures.ValidForV1().Count() >= 4, "valid device fixtures were not copied to the output directory");
+        Assert.True(ContractFixtures.ValidNeedingV2().Count() >= 3, "the fixtures that need v2 were not copied to the output directory");
     }
 
     /// <summary>
-    /// Every message the platform accepts must become a body the gateway accepts. If the device
-    /// contract gains something the gateway contract cannot carry, this is where it shows.
+    /// Every message of levels the platform accepts must become a body the gateway accepts. If the
+    /// device contract gains something the gateway contract cannot carry, this is where it shows.
     /// </summary>
     [Theory]
-    [MemberData(nameof(ContractFixtures.Valid), MemberType = typeof(ContractFixtures))]
-    public void EveryValidDeviceMessage_MapsToABodyTheGatewaySchemaAccepts(string fileName)
+    [MemberData(nameof(ContractFixtures.ValidForV1), MemberType = typeof(ContractFixtures))]
+    public void EveryValidLevelMessage_MapsToABodyTheGatewaySchemaAccepts(string fileName)
     {
         var message = Parse(fileName);
 
@@ -45,6 +46,22 @@ public class GatewayV1BatchTests
 
         var errors = GatewaySchema.Errors(body);
         Assert.True(errors.Count == 0, $"{fileName} mapped to an invalid body: {string.Join("; ", errors)}");
+    }
+
+    /// <summary>
+    /// Contract v1 has one reading kind and no sensor, and adding either is a breaking change for
+    /// it (ADR-011). A message with another type, or with readings that name their sensor, is
+    /// refused with the reason: never forwarded without its other readings, and never with an oil
+    /// separator's oil and sludge levels merged into one series.
+    /// </summary>
+    [Theory]
+    [MemberData(nameof(ContractFixtures.ValidNeedingV2), MemberType = typeof(ContractFixtures))]
+    public void MessageNeedingV2_HasNoV1Mapping(string fileName)
+    {
+        var message = Parse(fileName);
+
+        var exception = Assert.Throws<ForwardingException>(() => GatewayV1Batch.From(message, Context));
+        Assert.Contains("has no mapping in gateway contract v1", exception.Message, StringComparison.Ordinal);
     }
 
     [Fact]
