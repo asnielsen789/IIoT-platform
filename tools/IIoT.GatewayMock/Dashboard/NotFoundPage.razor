@@ -1,0 +1,32 @@
+@*
+    A device or message the mock does not hold: an address from before a restart, or a mistyped
+    one. Answered with 404 and a way back, not an error.
+*@
+<DashboardShell Title="Not found" SignedInAs="@SignedInAs" SignOutPath="@SignOutPath" TakenAt="@TakenAt">
+    <nav class="crumbs" aria-label="Breadcrumb">
+        <a href="@DashboardLinks.Overview"><Icon Name="back" Size="14" /> Overview</a>
+    </nav>
+    <section class="card">
+        <div class="empty">
+            <Icon Name="message" Size="40" />
+            <p>@What</p>
+            <p>The mock holds what it received in memory, so a restart forgets it.</p>
+            <p><a href="@DashboardLinks.Overview">Back to the overview</a></p>
+        </div>
+    </section>
+</DashboardShell>
+
+@code {
+    /// <summary>What was not found, in a sentence.</summary>
+    [Parameter, EditorRequired]
+    public string What { get; set; } = default!;
+
+    [Parameter]
+    public string? SignedInAs { get; set; }
+
+    [Parameter, EditorRequired]
+    public string SignOutPath { get; set; } = default!;
+
+    [Parameter, EditorRequired]
+    public DateTimeOffset TakenAt { get; set; }
+}

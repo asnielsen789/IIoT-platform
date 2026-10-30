@@ -5,7 +5,8 @@ using IIoT.GatewayMock.Readings;
 namespace IIoT.GatewayMock.Dashboard;
 
 /// <summary>
-/// What one view of the dashboard shows, read from the <see cref="ReadingStore"/> once per request.
+/// What the overview shows, read from the <see cref="ReadingStore"/> once per request: totals, and
+/// one summary per device.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -15,61 +16,166 @@ namespace IIoT.GatewayMock.Dashboard;
 /// <c>IIoT.Core</c> at all.
 /// </para>
 /// <para>
-/// Every string here came from a request body or a token and is untrusted. The page renders them
+/// Every string here came from a request body or a token and is untrusted. The pages render them
 /// through Razor, which HTML-encodes each one; nothing here is ever rendered as markup.
 /// </para>
 /// </remarks>
 /// <param name="TakenAt">When the snapshot was taken, by the mock's clock.</param>
 /// <param name="BatchCount">How many batches the mock holds.</param>
-/// <param name="LatestPerDevice">The newest reading of every device, ordered by device ID.</param>
-/// <param name="NewestBatches">The most recently stored batches, newest first, at most <see cref="MaxBatchesShown"/>.</param>
+/// <param name="ReadingCount">How many readings those batches hold.</param>
+/// <param name="LastStoredAt">When the newest batch was stored, or <c>null</c> before the first.</param>
+/// <param name="Devices">One summary per device, ordered by device ID.</param>
 public sealed record DashboardSnapshot(
     DateTimeOffset TakenAt,
     int BatchCount,
-    IReadOnlyList<DeviceLatestReading> LatestPerDevice,
-    IReadOnlyList<BatchView> NewestBatches)
+    int ReadingCount,
+    DateTimeOffset? LastStoredAt,
+    IReadOnlyList<DeviceSummary> Devices)
 {
-    /// <summary>
-    /// The store is unbounded and the page refreshes itself; rendering every batch ever received on
-    /// every refresh would grow without limit. The latest reading per device still considers all.
-    /// </summary>
-    public const int MaxBatchesShown = 100;
-
     public static DashboardSnapshot Create(IReadOnlyList<StoredBatch> batches, DateTimeOffset takenAt)
     {
         var views = batches.Select(BatchView.From).ToList();
 
-        var latest = views
+        var devices = views
+            .GroupBy(batch => batch.DeviceId, StringComparer.Ordinal)
+            .Select(device => DeviceSummary.From(device.Key, device.ToList()))
+            .OrderBy(device => device.DeviceId, StringComparer.Ordinal)
+            .ToList();
+
+        return new DashboardSnapshot(
+            takenAt,
+            views.Count,
+            views.Sum(batch => batch.Readings.Count),
+            views.Count == 0 ? null : views.Max(batch => batch.StoredAt),
+            devices);
+    }
+
+    /// <summary>
+    /// The newest reading among <paramref name="batches"/>, with the batch it arrived in.
+    /// </summary>
+    /// <remarks>
+    /// "Newest" is by the reading's own <c>at</c>, the time it was measured, not by when its batch
+    /// arrived. Delivery is at least once and backfill arrives late: a redelivered or buffered batch
+    /// can be stored after a newer one, and must not displace it. Ties, and readings whose <c>at</c>
+    /// cannot be read as a timestamp, fall back to arrival order. The device clock can be wrong,
+    /// which is why the pages show <c>at</c> next to the value.
+    /// </remarks>
+    internal static (ReadingView Reading, BatchView Batch)? Latest(IEnumerable<BatchView> batches)
+    {
+        var entries = batches
             .SelectMany(batch => batch.Readings.Select((reading, index) => (Batch: batch, Reading: reading, Index: index)))
-            .GroupBy(entry => entry.Batch.DeviceId, StringComparer.Ordinal)
-            .Select(device => device.MaxBy(entry => (entry.Reading.MeasuredAt ?? DateTimeOffset.MinValue, entry.Batch.Sequence, entry.Index)))
-            .OrderBy(entry => entry.Batch.DeviceId, StringComparer.Ordinal)
-            .Select(entry => new DeviceLatestReading(entry.Batch.DeviceId, entry.Reading, entry.Batch))
             .ToList();
 
-        var newest = views
-            .OrderByDescending(batch => batch.Sequence)
-            .Take(MaxBatchesShown)
-            .ToList();
+        if (entries.Count == 0)
+        {
+            return null;
+        }
 
-        return new DashboardSnapshot(takenAt, views.Count, latest, newest);
+        var newest = entries.MaxBy(entry => (entry.Reading.MeasuredAt ?? DateTimeOffset.MinValue, entry.Batch.Sequence, entry.Index));
+        return (newest.Reading, newest.Batch);
+    }
+}
+
+/// <summary>One device as the overview shows it.</summary>
+/// <param name="DeviceId">The authenticated device ID.</param>
+/// <param name="Latest">Its newest reading by measurement time, or <c>null</c> if no batch holds a readable one.</param>
+/// <param name="LatestBatch">The batch <paramref name="Latest"/> arrived in.</param>
+/// <param name="LastArrived">The device's most recently stored batch, which is not always the one holding its newest reading.</param>
+/// <param name="MessageCount">How many batches the mock holds from the device.</param>
+public sealed record DeviceSummary(
+    string DeviceId,
+    ReadingView? Latest,
+    BatchView? LatestBatch,
+    BatchView LastArrived,
+    int MessageCount)
+{
+    internal static DeviceSummary From(string deviceId, IReadOnlyList<BatchView> batches)
+    {
+        var latest = DashboardSnapshot.Latest(batches);
+
+        return new DeviceSummary(
+            deviceId,
+            latest?.Reading,
+            latest?.Batch,
+            batches.MaxBy(batch => batch.Sequence)!,
+            batches.Count);
     }
 }
 
 /// <summary>
-/// The newest reading of one device.
+/// What a device's page shows: its message history, its level trend and, when one is chosen, a
+/// message with its raw body.
 /// </summary>
-/// <remarks>
-/// "Newest" is by the reading's own <c>at</c>, the time it was measured, not by when its batch
-/// arrived. Delivery is at least once and backfill arrives late: a redelivered or buffered batch
-/// can be stored after a newer one, and must not displace it. Ties, and readings whose <c>at</c>
-/// cannot be read as a timestamp, fall back to arrival order. The device clock can be wrong, which
-/// is why the page shows <c>at</c> next to the value.
-/// </remarks>
-/// <param name="DeviceId">The authenticated device ID.</param>
-/// <param name="Reading">Its newest reading.</param>
-/// <param name="Batch">The batch that reading arrived in.</param>
-public sealed record DeviceLatestReading(string DeviceId, ReadingView Reading, BatchView Batch);
+/// <param name="TakenAt">When the snapshot was taken, by the mock's clock.</param>
+/// <param name="Device">The device's summary, as on the overview.</param>
+/// <param name="NewestBatches">Its most recently stored batches, newest first, at most <see cref="MaxBatchesShown"/>.</param>
+/// <param name="Trend">Its newest readings, laid out for the level chart.</param>
+/// <param name="Selected">The message chosen for the modal, or <c>null</c>.</param>
+public sealed record DeviceSnapshot(
+    DateTimeOffset TakenAt,
+    DeviceSummary Device,
+    IReadOnlyList<BatchView> NewestBatches,
+    LevelTrend Trend,
+    SelectedMessage? Selected)
+{
+    /// <summary>
+    /// The store is unbounded and the page refreshes itself; rendering every batch ever received
+    /// on every refresh would grow without limit. The summary still considers all of them.
+    /// </summary>
+    public const int MaxBatchesShown = 100;
+
+    /// <summary>The newest readings the level chart plots.</summary>
+    public const int MaxTrendReadings = 100;
+
+    /// <summary>
+    /// The snapshot for <paramref name="deviceId"/>, or <c>null</c> when the mock holds nothing
+    /// from it, or when <paramref name="messageId"/> names a message it does not hold from it.
+    /// </summary>
+    /// <param name="messageId">The message to show in the modal, or <c>null</c> for none.</param>
+    public static DeviceSnapshot? Create(
+        IReadOnlyList<StoredBatch> batches, string deviceId, string? messageId, DateTimeOffset takenAt)
+    {
+        var stored = batches.Where(batch => string.Equals(batch.DeviceId, deviceId, StringComparison.Ordinal)).ToList();
+        if (stored.Count == 0)
+        {
+            return null;
+        }
+
+        SelectedMessage? selected = null;
+        if (messageId is not null)
+        {
+            var batch = stored.FirstOrDefault(batch => string.Equals(batch.IdempotencyKey, messageId, StringComparison.Ordinal));
+            if (batch is null)
+            {
+                return null;
+            }
+
+            selected = new SelectedMessage(BatchView.From(batch), JsonView.Tokens(batch.Body));
+        }
+
+        var views = stored.Select(BatchView.From).ToList();
+
+        var readings = views
+            .SelectMany(batch => batch.Readings)
+            .Where(reading => reading.MeasuredAt is not null && reading.Number is not null)
+            .OrderByDescending(reading => reading.MeasuredAt)
+            .Take(MaxTrendReadings)
+            .Reverse()
+            .ToList();
+
+        return new DeviceSnapshot(
+            takenAt,
+            DeviceSummary.From(deviceId, views),
+            views.OrderByDescending(batch => batch.Sequence).Take(MaxBatchesShown).ToList(),
+            LevelTrend.Create(readings),
+            selected);
+    }
+}
+
+/// <summary>The message shown in the modal.</summary>
+/// <param name="Batch">The batch, as the history shows it.</param>
+/// <param name="Json">Its body as the mock stored it, indented and split into tokens for colouring.</param>
+public sealed record SelectedMessage(BatchView Batch, IReadOnlyList<JsonToken> Json);
 
 /// <summary>One stored batch, as the dashboard shows it.</summary>
 /// <param name="Sequence">Arrival order in the mock.</param>
@@ -90,6 +196,14 @@ public sealed record BatchView(
     string? Firmware,
     IReadOnlyList<ReadingView> Readings)
 {
+    /// <summary>
+    /// The least trustworthy quality among the readings: <c>bad</c>, then <c>uncertain</c>, then
+    /// <c>ok</c>; <c>null</c> when no reading has one.
+    /// </summary>
+    public string? WorstQuality =>
+        Readings.Select(reading => reading.Quality).Where(quality => quality is not null)
+            .OrderByDescending(QualityRank).FirstOrDefault();
+
     /// <remarks>
     /// Every body in the store passed the schema, so each field is present and of its type. The
     /// store is public, though, and the page must not fail on a body that was put there some other
@@ -122,6 +236,15 @@ public sealed record BatchView(
         value.ValueKind == JsonValueKind.String
             ? value.GetString()
             : null;
+
+    /// <summary>An unknown quality ranks between <c>ok</c> and <c>uncertain</c>: worth a look, not an alarm.</summary>
+    private static int QualityRank(string? quality) => quality switch
+    {
+        "ok" => 0,
+        "uncertain" => 2,
+        "bad" => 3,
+        _ => 1
+    };
 }
 
 /// <summary>One reading, as the dashboard shows it.</summary>
@@ -130,25 +253,29 @@ public sealed record BatchView(
 /// <param name="Unit">Its unit.</param>
 /// <param name="At">When it was measured, by the device clock, as sent.</param>
 /// <param name="Quality">The device's own assessment.</param>
-/// <param name="MeasuredAt"><paramref name="At"/> read as a timestamp, or <c>null</c> if it cannot be; used only for ordering.</param>
+/// <param name="MeasuredAt"><paramref name="At"/> read as a timestamp, or <c>null</c> if it cannot be; used for ordering, the chart and display.</param>
+/// <param name="Number"><paramref name="Value"/> as a number, or <c>null</c>; used only to place the reading on the chart.</param>
 public sealed record ReadingView(
     string? Kind,
     string? Value,
     string? Unit,
     string? At,
     string? Quality,
-    DateTimeOffset? MeasuredAt)
+    DateTimeOffset? MeasuredAt,
+    double? Number)
 {
     internal static ReadingView From(JsonElement reading)
     {
         var at = BatchView.StringProperty(reading, "at");
+        var value = reading.TryGetProperty("value", out var element) && element.ValueKind == JsonValueKind.Number ? element : (JsonElement?)null;
 
         return new ReadingView(
             BatchView.StringProperty(reading, "kind"),
-            reading.TryGetProperty("value", out var value) && value.ValueKind == JsonValueKind.Number ? value.GetRawText() : null,
+            value?.GetRawText(),
             BatchView.StringProperty(reading, "unit"),
             at,
             BatchView.StringProperty(reading, "quality"),
-            DateTimeOffset.TryParse(at, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal, out var measuredAt) ? measuredAt : null);
+            DateTimeOffset.TryParse(at, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal, out var measuredAt) ? measuredAt : null,
+            value is { } number && number.TryGetDouble(out var parsed) && double.IsFinite(parsed) ? parsed : null);
     }
 }
