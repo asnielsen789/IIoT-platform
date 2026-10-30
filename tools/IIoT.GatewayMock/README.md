@@ -249,55 +249,30 @@ in. The launch profile serves HTTPS itself, so no forwarded header is involved.
 
 The hosted mock is the App Service app `app-iiot-staging-sdc-gateway-mock-<suffix>`
 ([infra/README.md, Gateway mock](../../infra/README.md#gateway-mock)). Its host,
-`<app name>.azurewebsites.net`, is the `<mock host>` above. Once the Auth0 application is set up
-for that host, the app needs these six settings, in addition to the three `GatewayMock__Jwt__*`
-settings the templates already set:
+`<app name>.azurewebsites.net`, is the `<mock host>` above. The templates set the dashboard up
+when the parameter `gatewayMockDashboardAuthority` is set. The procedure, from the Auth0
+application to the checks, is
+[Gateway mock dashboard (one-time)](../../infra/README.md#gateway-mock-dashboard-one-time) in the
+infrastructure README. The app then has these six settings, in addition to the three
+`GatewayMock__Jwt__*` settings:
 
 | App setting | Value |
 |---|---|
 | `GatewayMock__Dashboard__Authority` | `https://<tenant domain>/` |
-| `GatewayMock__Dashboard__ClientId` | The dashboard application's client ID |
-| `GatewayMock__Dashboard__ClientSecret` | The dashboard application's client secret. **Secret** |
+| `GatewayMock__Dashboard__ClientId` | A Key Vault reference to the secret `gateway-mock-dashboard-client-id` |
+| `GatewayMock__Dashboard__ClientSecret` | A Key Vault reference to the secret `gateway-mock-dashboard-client-secret`. **Secret** |
 | `GatewayMock__ForwardedHeaders__KnownNetworks__0` | `10.0.0.0/8` |
 | `GatewayMock__ForwardedHeaders__KnownNetworks__1` | `172.16.0.0/12` |
 | `GatewayMock__ForwardedHeaders__KnownNetworks__2` | `192.168.0.0/16` |
 
 `GatewayMock__ForwardedHeaders__Enabled` is not needed: it follows the dashboard.
 
-Two properties of the current template, `infra/modules/gateway-mock.bicep`, decide how the
-settings get there:
-- **The template owns the app settings.** Every infrastructure deployment writes the app's
-  settings from the template, so a setting added outside it is gone afterwards. The lasting place
-  for all six is the template.
-- **The app has no managed identity yet,** so it cannot resolve a Key Vault reference. The secret
-  belongs in Key Vault, referenced like the Function's `GatewayAuth__ClientSecret`
-  (`@Microsoft.KeyVault(SecretUri=…)`). That needs the app to get an identity with Key Vault
-  Secrets User on that secret. Until the template does that, the secret can only be a plain app
-  setting: App Service encrypts it at rest, but anyone who can read the app's settings can read
-  it.
-
-To try the dashboard before the template carries it, set the six by hand, and again after every
-infrastructure deployment. The secret is read without echo:
-
-```sh
-read -rs -p "Dashboard client secret: " DASHBOARD_SECRET && echo
-az webapp config appsettings set --resource-group "$RG" --name "$MOCK_APP" -o none --settings \
-  GatewayMock__Dashboard__Authority=https://<tenant domain>/ \
-  GatewayMock__Dashboard__ClientId=<the dashboard application's client ID> \
-  GatewayMock__Dashboard__ClientSecret="$DASHBOARD_SECRET" \
-  GatewayMock__ForwardedHeaders__KnownNetworks__0=10.0.0.0/8 \
-  GatewayMock__ForwardedHeaders__KnownNetworks__1=172.16.0.0/12 \
-  GatewayMock__ForwardedHeaders__KnownNetworks__2=192.168.0.0/16
-unset DASHBOARD_SECRET
-```
-
-The app restarts with the new settings. It worked when all four hold:
-- `az webapp log tail` shows `Dashboard enabled at /dashboard`. If the mock does not start
-  instead, the log names the setting that is wrong.
-- `https://<mock host>/dashboard` redirects to the tenant's sign-in page.
-- That page's address contains `redirect_uri=https%3A%2F%2F<mock host>%2Fdashboard%2Fsignin-oidc`:
-  HTTPS, and the app's own host.
-- `POST /v1/readings` without a token is still `401`.
+The app reads the client ID and secret with its own identity, a system-assigned one with Key
+Vault Secrets User on those two secrets alone. App Service resolves the references and hands the
+mock the values. A reference it cannot resolve reaches the mock as the reference text, which is
+why the first deployment ends with a refresh (step 3 of the procedure). The settings come from the template,
+which writes all of the app's settings on every infrastructure deployment: a setting added by
+hand is gone after the next one.
 
 The session cookie and the sign-in state are protected with ASP.NET Core Data Protection keys. On
 App Service the framework keeps those keys in the app's `%HOME%` storage

@@ -8,8 +8,11 @@
 // unloads when idle, and the first request after that waits for it to start. That suits a mock
 // that receives a message every few hours. It also has a daily CPU quota of 60 minutes.
 //
-// The mock needs no Azure access: no managed identity, no Key Vault, no role assignments. Its
-// configuration is three public values, the issuer and audience it accepts tokens for.
+// The API needs no Azure access. Its configuration is three public values, the issuer and
+// audience it accepts tokens for. The dashboard (#47) is optional: with `dashboardAuthority` set,
+// the app gets a system-assigned identity that can read exactly two Key Vault secrets, the
+// dashboard's client ID and secret at the identity provider, through Key Vault references.
+// Without it, the app has no identity and no role, as before.
 
 @description('Name of the App Service plan.')
 param planName string
@@ -28,6 +31,39 @@ param jwtIssuer string
 
 @description('Audience the mock requires in `aud`: the gateway API\'s identifier, the same one the Function requests its token for.')
 param jwtAudience string
+
+@description('OpenID Connect issuer people sign in to the dashboard with (GatewayMock:Dashboard:Authority), with its trailing slash. Empty leaves the dashboard off.')
+param dashboardAuthority string = ''
+
+@description('Key Vault in this resource group that holds the dashboard\'s client ID and secret. Read only when the dashboard is on.')
+param keyVaultName string
+
+@description('Name of the secret holding the dashboard\'s client ID at the identity provider. It must exist before a deployment that turns the dashboard on.')
+param dashboardClientIdSecretName string
+
+@description('Name of the secret holding the dashboard\'s client secret. It must exist before a deployment that turns the dashboard on.')
+param dashboardClientSecretSecretName string
+
+var dashboard = !empty(dashboardAuthority)
+
+// Built-in role definition ID.
+var keyVaultSecretsUserRoleId = '4633458b-17de-408a-b874-0445c86b69e6'
+
+resource keyVault 'Microsoft.KeyVault/vaults@2026-05-15' existing = {
+  name: keyVaultName
+}
+
+// Written by an operator (infra/README.md, "Gateway mock dashboard (one-time)"), never by the
+// template, which would need the values as parameters.
+resource dashboardClientIdSecret 'Microsoft.KeyVault/vaults/secrets@2026-05-15' existing = {
+  parent: keyVault
+  name: dashboardClientIdSecretName
+}
+
+resource dashboardClientSecretSecret 'Microsoft.KeyVault/vaults/secrets@2026-05-15' existing = {
+  parent: keyVault
+  name: dashboardClientSecretSecretName
+}
 
 resource plan 'Microsoft.Web/serverfarms@2025-03-01' = {
   name: planName
@@ -49,6 +85,10 @@ resource app 'Microsoft.Web/sites@2025-03-01' = {
   location: location
   tags: tags
   kind: 'app,linux'
+  // System-assigned: it exists only for this app's Key Vault references, and goes with the app.
+  identity: {
+    type: dashboard ? 'SystemAssigned' : 'None'
+  }
   properties: {
     serverFarmId: plan.id
     httpsOnly: true
@@ -60,23 +100,82 @@ resource app 'Microsoft.Web/sites@2025-03-01' = {
       http20Enabled: true
       // Not available on F1; stated so that nobody expects the app to stay loaded.
       alwaysOn: false
-      appSettings: [
-        // GatewayJwtOptions (tools/IIoT.GatewayMock/Authentication): the mock refuses to start
-        // without an issuer and an audience. For Auth0 the authority is the issuer itself.
-        {
-          name: 'GatewayMock__Jwt__Authority'
-          value: jwtIssuer
-        }
-        {
-          name: 'GatewayMock__Jwt__Issuer'
-          value: jwtIssuer
-        }
-        {
-          name: 'GatewayMock__Jwt__Audience'
-          value: jwtAudience
-        }
-      ]
+      appSettings: concat(
+        [
+          // GatewayJwtOptions (tools/IIoT.GatewayMock/Authentication): the mock refuses to start
+          // without an issuer and an audience. For Auth0 the authority is the issuer itself.
+          {
+            name: 'GatewayMock__Jwt__Authority'
+            value: jwtIssuer
+          }
+          {
+            name: 'GatewayMock__Jwt__Issuer'
+            value: jwtIssuer
+          }
+          {
+            name: 'GatewayMock__Jwt__Audience'
+            value: jwtAudience
+          }
+        ],
+        dashboard
+          ? [
+              // DashboardOptions (tools/IIoT.GatewayMock/Dashboard). The authority switches the
+              // dashboard on; the client ID and secret are Key Vault references, resolved with
+              // the app's own identity.
+              {
+                name: 'GatewayMock__Dashboard__Authority'
+                value: dashboardAuthority
+              }
+              {
+                name: 'GatewayMock__Dashboard__ClientId'
+                value: '@Microsoft.KeyVault(SecretUri=${keyVault.properties.vaultUri}secrets/${dashboardClientIdSecretName})'
+              }
+              {
+                name: 'GatewayMock__Dashboard__ClientSecret'
+                value: '@Microsoft.KeyVault(SecretUri=${keyVault.properties.vaultUri}secrets/${dashboardClientSecretSecretName})'
+              }
+              // TLS ends at App Service's front end, which connects from these private ranges.
+              // Their X-Forwarded-Proto is believed, so the sign-in's redirect URI is https://
+              // (tools/IIoT.GatewayMock/README.md, "Behind a TLS-terminating proxy").
+              {
+                name: 'GatewayMock__ForwardedHeaders__KnownNetworks__0'
+                value: '10.0.0.0/8'
+              }
+              {
+                name: 'GatewayMock__ForwardedHeaders__KnownNetworks__1'
+                value: '172.16.0.0/12'
+              }
+              {
+                name: 'GatewayMock__ForwardedHeaders__KnownNetworks__2'
+                value: '192.168.0.0/16'
+              }
+            ]
+          : []
+      )
     }
+  }
+}
+
+// Read access to the dashboard's two secrets, each scoped to the secret itself, not the vault:
+// the vault also holds the Function's IoT Hub connection string and its gateway credentials,
+// which the mock has no business reading.
+resource clientIdSecretsUser 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (dashboard) {
+  name: guid(dashboardClientIdSecret.id, app.id, keyVaultSecretsUserRoleId)
+  scope: dashboardClientIdSecret
+  properties: {
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', keyVaultSecretsUserRoleId)
+    principalId: app.identity.principalId
+    principalType: 'ServicePrincipal'
+  }
+}
+
+resource clientSecretSecretsUser 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (dashboard) {
+  name: guid(dashboardClientSecretSecret.id, app.id, keyVaultSecretsUserRoleId)
+  scope: dashboardClientSecretSecret
+  properties: {
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', keyVaultSecretsUserRoleId)
+    principalId: app.identity.principalId
+    principalType: 'ServicePrincipal'
   }
 }
 

@@ -39,6 +39,11 @@ param gatewayAuthIssuer = 'https://iiot-staging.eu.auth0.com/'
 // separate component; it stays in the EU, and only its calls from the Function cross regions.
 param gatewayMockLocation = 'swedencentral'
 
+// The mock's dashboard (#47): people sign in with the same Auth0 tenant, through an application of
+// its own (a Regular Web Application). Its client ID and secret are in Key Vault (README.md,
+// "Gateway mock dashboard (one-time)").
+param gatewayMockDashboardAuthority = 'https://iiot-staging.eu.auth0.com/'
+
 // The repository whose deploy workflow may deploy the Function's code (#5). It was created after
 // 15 July 2026, so GitHub issues it OIDC subjects in the immutable form, with the owner's and the
 // repository's numeric IDs after the names: a deleted and re-created, or renamed and re-used,
