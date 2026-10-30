@@ -1,5 +1,6 @@
 using System.Globalization;
 using IIoT.TestClient.Payloads;
+using IIoT.TestClient.Provisioning;
 
 namespace IIoT.TestClient.Configuration;
 
@@ -26,8 +27,14 @@ public static class CommandLine
     /// <summary>Environment variable consulted when <c>--devices</c> is absent.</summary>
     public const string DevicesFileVariable = "DEVICES_FILE";
 
+    /// <summary>Environment variable consulted when <c>--id-scope</c> is absent.</summary>
+    public const string IdScopeVariable = "DPS_ID_SCOPE";
+
     /// <summary>The first argument that selects key and CSR generation instead of a run.</summary>
     public const string CreateCsrCommand = "create-csr";
+
+    /// <summary>The first argument that selects registration through DPS instead of a run.</summary>
+    public const string ProvisionCommand = "provision";
 
     /// <summary>Usage text, printed for <c>--help</c> and for any usage error.</summary>
     public const string Usage = """
@@ -39,6 +46,7 @@ public static class CommandLine
           IIoT.TestClient --hub <name|hostname> --device-id <id> --cert <file> --key <file> [options]
           IIoT.TestClient --hub <name|hostname> --devices <path> --device-count <n> [options]
           IIoT.TestClient create-csr --device-id <id> [--out <dir>]
+          IIoT.TestClient provision --id-scope <scope> --cert <file> --key <file> [options]
 
         Target:
           --hub <name|hostname>   IoT Hub. A bare name gains '.azure-devices.net'.
@@ -82,6 +90,17 @@ public static class CommandLine
           --out <dir>             Where to write. Default: ~/.secrets/iiot, outside the repo.
           Writes <id>.key.pem, a new EC P-256 private key (NEVER COMMIT OR SHARE IT), and
           <id>.csr.pem, the request for IIoT.DeviceCa issue --csr. Never overwrites a file.
+
+        Zero-touch provisioning (provision):
+          --id-scope <scope>      The DPS instance's ID scope. Falls back to DPS_ID_SCOPE.
+          --cert <file>           The device certificate, as above. Its CN is the registration ID,
+                                  and DPS registers the device in IoT Hub under that ID.
+          --key <file>            The private key create-csr wrote for that certificate.
+          --dps-host <host>       Default: global.azure-devices-provisioning.net.
+          --fixture <selector>    The one message sent to the assigned hub. Default: valid.
+          --no-send               Stop once DPS has assigned the device.
+          Registers with DPS, waits for the assignment, then connects to the hub DPS named and
+          sends one message.
         """;
 
     /// <summary>Parses <paramref name="args"/> into a validated configuration.</summary>
@@ -264,6 +283,88 @@ public static class CommandLine
             throw new CommandLineException($"{CreateCsrCommand} needs --device-id (or {DeviceIdVariable}).");
 
         return new CreateCsrOptions(deviceId, Trimmed(directory) ?? defaultDirectory);
+    }
+
+    /// <summary>Whether <paramref name="args"/> asks for <c>provision</c> rather than a run.</summary>
+    public static bool IsProvision(string[] args)
+    {
+        ArgumentNullException.ThrowIfNull(args);
+
+        return args.Length > 0 && args[0] == ProvisionCommand;
+    }
+
+    /// <summary>Parses a <c>provision</c> command line, starting with the command itself.</summary>
+    /// <param name="args">The raw command line, <c>provision</c> first.</param>
+    /// <param name="environment">Environment lookup, for the <c>DPS_ID_SCOPE</c> fallback.</param>
+    /// <returns>The options, or <see langword="null"/> when help was requested.</returns>
+    /// <exception cref="CommandLineException">The arguments do not form the command.</exception>
+    public static ProvisionOptions? ParseProvision(string[] args, Func<string, string?> environment)
+    {
+        ArgumentNullException.ThrowIfNull(environment);
+
+        if (!IsProvision(args))
+            throw new CommandLineException($"Expected '{ProvisionCommand}' as the first argument.");
+
+        string? idScope = null;
+        string? certificateFile = null;
+        string? keyFile = null;
+        string? dpsHost = null;
+        string? fixture = null;
+        var send = true;
+
+        for (var i = 1; i < args.Length; i++)
+        {
+            var argument = args[i];
+            switch (argument)
+            {
+                case "-h" or "--help":
+                    return null;
+                case "--id-scope":
+                    idScope = Value(args, ref i);
+                    break;
+                case "--cert":
+                    certificateFile = Value(args, ref i);
+                    break;
+                case "--key":
+                    keyFile = Value(args, ref i);
+                    break;
+                case "--dps-host":
+                    dpsHost = Value(args, ref i);
+                    break;
+                case "--fixture":
+                    fixture = Value(args, ref i);
+                    break;
+                case "--no-send":
+                    send = false;
+                    break;
+                default:
+                    // Includes --hub and --device-id: DPS names the hub, and the certificate's CN
+                    // is the device ID, so either one here would be a second answer to a settled question.
+                    throw new CommandLineException($"{ProvisionCommand} does not take '{argument}'.");
+            }
+        }
+
+        idScope = Trimmed(idScope) ?? Trimmed(environment(IdScopeVariable));
+        if (idScope is null)
+            throw new CommandLineException($"{ProvisionCommand} needs --id-scope (or {IdScopeVariable}).");
+
+        certificateFile = Trimmed(certificateFile);
+        keyFile = Trimmed(keyFile);
+        if (certificateFile is null || keyFile is null)
+        {
+            throw new CommandLineException(
+                $"{ProvisionCommand} needs --cert and --key: DPS authenticates the device by its certificate.");
+        }
+
+        if (!send && fixture is not null)
+            throw new CommandLineException("--fixture chooses the message to send; with --no-send nothing is sent.");
+
+        return new ProvisionOptions(idScope, certificateFile, keyFile)
+        {
+            DpsHost = Trimmed(dpsHost) ?? DpsEndpoint.GlobalHostName,
+            Send = send,
+            Fixture = Trimmed(fixture) ?? TelemetryFixtures.ValidSelector
+        };
     }
 
     private static string? Trimmed(string? value) =>

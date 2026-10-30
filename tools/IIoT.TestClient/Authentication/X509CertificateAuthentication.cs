@@ -76,6 +76,38 @@ public sealed class X509CertificateAuthentication : IDeviceAuthentication, IDisp
         return Create(deviceId, ReadFile(certificateFile, "Certificate"), certificateFile, ReadFile(keyFile, "Key"), keyFile, now);
     }
 
+    /// <summary>
+    /// As <see cref="Load"/>, for the device the certificate itself names: its CN becomes the device ID.
+    /// </summary>
+    /// <remarks>
+    /// For DPS, where the CN is the registration ID and there is no device ID yet to check it
+    /// against: DPS makes the CN the device ID when it registers the device (#48).
+    /// </remarks>
+    /// <exception cref="FileNotFoundException">Either file is missing.</exception>
+    /// <exception cref="InvalidDataException">
+    /// The certificate has no single CN, is not valid now, or the key does not belong to it.
+    /// </exception>
+    public static X509CertificateAuthentication LoadByCommonName(string certificateFile, string keyFile, DateTimeOffset now)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(certificateFile);
+        ArgumentException.ThrowIfNullOrWhiteSpace(keyFile);
+
+        var certificatePem = ReadFile(certificateFile, "Certificate");
+        string? commonName;
+        using (var device = FirstCertificate(certificatePem, certificateFile))
+        {
+            commonName = CommonName(device);
+            if (commonName is null)
+            {
+                throw new InvalidDataException(
+                    $"The certificate in {certificateFile} ({device.Subject}) has no single CN, so it names no device. " +
+                    "A device certificate must have the subject CN=<deviceId>.");
+            }
+        }
+
+        return Create(commonName, certificatePem, certificateFile, ReadFile(keyFile, "Key"), keyFile, now);
+    }
+
     /// <summary>As <see cref="Load"/>, from PEM text rather than files.</summary>
     public static X509CertificateAuthentication FromPem(
         string deviceId, string certificatePem, string keyPem, DateTimeOffset now) =>

@@ -1291,6 +1291,9 @@ It worked when the group is `enabled`, with attestation `x509` and CA `device-ca
   A device that provisions again may be moved to another hub, and its twin goes with it. That is
   the mechanism for moving devices between hubs (step 7 of #48).
 
+A device then provisions itself: the test client's `provision` command does what device firmware
+would ([Zero-touch provisioning](../tools/IIoT.TestClient/README.md#zero-touch-provisioning)).
+
 ### After DPS or the hub is recreated
 
 The certificate registration and the enrollment group belong to the DPS instance: tearing it down

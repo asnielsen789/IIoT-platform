@@ -1,6 +1,7 @@
 using IIoT.TestClient.Authentication;
 using IIoT.TestClient.Configuration;
 using IIoT.TestClient.Payloads;
+using IIoT.TestClient.Provisioning;
 using IIoT.TestClient.Simulation;
 
 namespace IIoT.TestClient;
@@ -15,6 +16,9 @@ public static class Program
     {
         if (CommandLine.IsCreateCsr(args))
             return await CreateCsrAsync(args);
+
+        if (CommandLine.IsProvision(args))
+            return await ProvisionAsync(args);
 
         TestClientOptions? options;
         try
@@ -110,6 +114,58 @@ public static class Program
         Console.WriteLine(
             $"  IIoT.DeviceCa issue --vault <vault> --hub <hub> --csr \"{written.CsrPath}\" " +
             $"--device-id {options.DeviceId} --out \"{options.OutputDirectory}\"");
+        Console.WriteLine("For a device DPS registers (provision), use --no-register instead of --hub.");
         return 0;
+    }
+
+    /// <summary>
+    /// <c>provision</c>: register through DPS with the device certificate, then send one message to
+    /// the hub DPS assigned (#48).
+    /// </summary>
+    private static async Task<int> ProvisionAsync(string[] args)
+    {
+        ProvisionOptions? options;
+        try
+        {
+            options = CommandLine.ParseProvision(args, Environment.GetEnvironmentVariable);
+        }
+        catch (CommandLineException ex)
+        {
+            await Console.Error.WriteLineAsync(ex.Message);
+            await Console.Error.WriteLineAsync();
+            await Console.Error.WriteLineAsync(CommandLine.Usage);
+            return 2;
+        }
+
+        if (options is null)
+        {
+            Console.WriteLine(CommandLine.Usage);
+            return 0;
+        }
+
+        using var cancellation = new CancellationTokenSource();
+        Console.CancelKeyPress += (_, eventArgs) =>
+        {
+            eventArgs.Cancel = true;
+            cancellation.Cancel();
+        };
+
+        var runner = new ProvisioningRunner(options, TelemetryFixtures.FromOutputDirectory(), Console.Out);
+
+        try
+        {
+            return await runner.RunAsync(cancellation.Token) ? 0 : 1;
+        }
+        catch (OperationCanceledException)
+        {
+            await Console.Error.WriteLineAsync("Stopped.");
+            return 0;
+        }
+        catch (Exception ex)
+        {
+            // As for a run: the message, never the key, which is in no message.
+            await Console.Error.WriteLineAsync($"{ex.GetType().Name}: {ex.Message}");
+            return 1;
+        }
     }
 }

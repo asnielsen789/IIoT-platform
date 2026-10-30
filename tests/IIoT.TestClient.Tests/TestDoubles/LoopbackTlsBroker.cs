@@ -8,14 +8,17 @@ using System.Text;
 namespace IIoT.TestClient.Tests.TestDoubles;
 
 /// <summary>
-/// Just enough of IoT Hub's device endpoint to test certificate authentication on loopback: a TLS
-/// server on 127.0.0.1 that requires a client certificate, decides whether to accept it, and then
-/// answers one MQTT 3.1.1 CONNECT with a CONNACK.
+/// Just enough of IoT Hub's or DPS's device endpoint to test certificate authentication on
+/// loopback: a TLS server on 127.0.0.1 that requires a client certificate, decides whether to
+/// accept it, answers one MQTT 3.1.1 CONNECT with a CONNACK, and then serves the session until
+/// the client disconnects.
 /// </summary>
 /// <remarks>
 /// It records what crossed the wire, which is the point: the certificate the client presented,
-/// any further certificates it sent with it, and the CONNECT packet. It is not a broker and does
-/// not pretend to be IoT Hub's certificate validation; the acceptance decision is the test's.
+/// any further certificates it sent with it, the CONNECT packet, and every SUBSCRIBE and PUBLISH
+/// that followed. A test that sets <see cref="Respond"/> plays the service: each publish it
+/// receives can be answered with messages of its own. It is not a broker and does not pretend to
+/// be IoT Hub's certificate validation; the acceptance decision is the test's.
 /// </remarks>
 public sealed class LoopbackTlsBroker : IDisposable
 {
@@ -48,6 +51,18 @@ public sealed class LoopbackTlsBroker : IDisposable
 
     /// <summary>The CONNECT packet, once read.</summary>
     public ConnectPacket? Connect { get; private set; }
+
+    /// <summary>The topic filters the client subscribed to, in order.</summary>
+    public List<string> Subscriptions { get; } = [];
+
+    /// <summary>The messages the client published, in order.</summary>
+    public List<(string Topic, byte[] Payload)> Published { get; } = [];
+
+    /// <summary>
+    /// The service's answer to each message the client publishes, sent back as QoS 0 publishes.
+    /// Unset, a publish is acknowledged and nothing more.
+    /// </summary>
+    public Func<string, byte[], IEnumerable<(string Topic, byte[] Payload)>>? Respond { get; init; }
 
     /// <summary>True when the client ended with an MQTT DISCONNECT.</summary>
     public bool DisconnectReceived { get; private set; }
@@ -84,8 +99,7 @@ public sealed class LoopbackTlsBroker : IDisposable
             await tls.WriteAsync(new byte[] { 0x20, 0x02, 0x00, 0x00 }, cancellationToken);
             await tls.FlushAsync(cancellationToken);
 
-            var (next, _) = await ReadPacketAsync(tls, cancellationToken);
-            DisconnectReceived = next == 0xE0;
+            await ServeSessionAsync(tls, cancellationToken);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
@@ -94,6 +108,90 @@ public sealed class LoopbackTlsBroker : IDisposable
     }
 
     public void Dispose() => _listener.Stop();
+
+    private async Task ServeSessionAsync(Stream tls, CancellationToken cancellationToken)
+    {
+        while (true)
+        {
+            var (type, body) = await ReadPacketAsync(tls, cancellationToken);
+            switch (type >> 4)
+            {
+                case 14: // DISCONNECT
+                    DisconnectReceived = true;
+                    return;
+
+                case 8: // SUBSCRIBE
+                    await SubscribeAsync(tls, body, cancellationToken);
+                    break;
+
+                case 3: // PUBLISH
+                    await PublishAsync(tls, type, body, cancellationToken);
+                    break;
+
+                case 12: // PINGREQ
+                    await WritePacketAsync(tls, 0xD0, [], cancellationToken);
+                    break;
+
+                default:
+                    throw new InvalidDataException($"Unexpected packet type 0x{type:X2}.");
+            }
+        }
+    }
+
+    /// <summary>Records each filter and grants it, at QoS 1 at most, as DPS and IoT Hub do.</summary>
+    private async Task SubscribeAsync(Stream tls, byte[] body, CancellationToken cancellationToken)
+    {
+        // Packet ID, then each filter followed by its requested QoS.
+        var position = 2;
+        var granted = new List<byte>();
+        while (position < body.Length)
+        {
+            Subscriptions.Add(Encoding.UTF8.GetString(ConnectPacket.Field(body, ref position)));
+            granted.Add(Math.Min(body[position++], (byte)1));
+        }
+
+        await WritePacketAsync(tls, 0x90, [body[0], body[1], .. granted], cancellationToken);
+    }
+
+    /// <summary>Records the message, acknowledges it above QoS 0, and sends <see cref="Respond"/>'s answers.</summary>
+    private async Task PublishAsync(Stream tls, byte type, byte[] body, CancellationToken cancellationToken)
+    {
+        // Topic, a packet ID above QoS 0, then the payload.
+        var position = 0;
+        var topic = Encoding.UTF8.GetString(ConnectPacket.Field(body, ref position));
+        if (((type >> 1) & 0x03) > 0)
+        {
+            await WritePacketAsync(tls, 0x40, [body[position], body[position + 1]], cancellationToken);
+            position += 2;
+        }
+
+        var payload = body[position..];
+        Published.Add((topic, payload));
+        foreach (var (answerTopic, answerPayload) in Respond?.Invoke(topic, payload) ?? [])
+        {
+            var name = Encoding.UTF8.GetBytes(answerTopic);
+            await WritePacketAsync(
+                tls, 0x30, [(byte)(name.Length >> 8), (byte)name.Length, .. name, .. answerPayload], cancellationToken);
+        }
+    }
+
+    private static async Task WritePacketAsync(Stream stream, byte type, byte[] body, CancellationToken cancellationToken)
+    {
+        // Remaining length: seven bits a byte, least significant first, high bit = more follows.
+        var header = new List<byte> { type };
+        var length = body.Length;
+        do
+        {
+            var next = (byte)(length & 0x7F);
+            length >>= 7;
+            header.Add(length > 0 ? (byte)(next | 0x80) : next);
+        }
+        while (length > 0);
+
+        await stream.WriteAsync(header.ToArray(), cancellationToken);
+        await stream.WriteAsync(body, cancellationToken);
+        await stream.FlushAsync(cancellationToken);
+    }
 
     private bool Validate(object sender, X509Certificate? certificate, X509Chain? chain, SslPolicyErrors errors)
     {
@@ -171,7 +269,8 @@ public sealed record ConnectPacket(string ClientId, string? UserName, byte[]? Pa
         return new ConnectPacket(clientId, userName, password);
     }
 
-    private static byte[] Field(byte[] body, ref int position)
+    /// <summary>Reads one length-prefixed field, as every MQTT string and binary field is encoded.</summary>
+    public static byte[] Field(byte[] body, ref int position)
     {
         var length = (body[position] << 8) | body[position + 1];
         var value = body.AsSpan(position + 2, length).ToArray();
