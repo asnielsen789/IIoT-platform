@@ -534,12 +534,17 @@ MOCK_APP=$(output gatewayMockAppName)
 OUT="$TEMP/gateway-mock" ZIP="$TEMP/gateway-mock.zip"
 rm -rf "$OUT" "$ZIP"
 dotnet publish tools/IIoT.GatewayMock -c Release -o "$OUT"
-powershell.exe -NoProfile -Command "Compress-Archive -Path '$(cygpath -w "$OUT")\*' -DestinationPath '$(cygpath -w "$ZIP")' -Force"
-az webapp deploy --resource-group "$RG" --name "$MOCK_APP" --src-path "$ZIP" --type zip
+(cd "$OUT" && /c/Windows/System32/tar.exe -a -c -f "$(cygpath -w "$ZIP")" *)
+az webapp deploy --resource-group "$RG" --name "$MOCK_APP" --src-path "$ZIP" --type zip --clean true
 ```
 
-`Compress-Archive` builds the zip, because Git Bash has no `zip`. The deployment ends with "Site
-started successfully". Then check that the mock refuses an unauthenticated call. `401` is right:
+Windows' own `tar` builds the zip, because Git Bash has no `zip`. **Not `Compress-Archive`:**
+Windows PowerShell 5.1 writes the paths inside the zip with backslashes. On Linux those become
+file names such as `wwwroot\_framework\blazor.web.js`, the deployment's copy step fails on them,
+and the files it leaves behind make requests fail. This first showed on 2026-10-30, when the
+dashboard's Razor components gave the publish output its first subfolder. `--clean true`
+removes whatever an earlier deployment left that the new one does not contain. The deployment
+ends with "Site started successfully". Then check that the mock refuses an unauthenticated call. `401` is right:
 it means the mock is running and its JWT validation is on.
 
 ```sh

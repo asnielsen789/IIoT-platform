@@ -181,13 +181,21 @@ choose its scheme. These limits apply:
   App Service passes through; the check in [Switching it on in staging](#switching-it-on-in-staging)
   shows it.
 
-For App Service, Microsoft's guidance is to trust the three private ranges its front end connects
-from ([Configure ASP.NET Core apps: Detect HTTPS session](https://learn.microsoft.com/azure/app-service/configure-language-dotnetcore#detect-https-session)):
-`10.0.0.0/8`, `172.16.0.0/12` and `192.168.0.0/16`. A request from the internet does not arrive
-from those addresses. If the provider still reports an `http://` redirect URI, the
-forwarded-headers middleware logs the address it did not trust (`Unknown proxy: …`, at Debug
-level, category `Microsoft.AspNetCore.HttpOverrides.ForwardedHeadersMiddleware`); trust that
-network. `0.0.0.0/0` would trust anyone who can reach the app.
+**On Linux App Service, trust `169.254.0.0/16`.** The front end reaches the app's container from
+the link-local range. Link-local addresses are not routed, so nothing outside the host can
+connect from them. Microsoft's sample trusts the three private ranges `10.0.0.0/8`,
+`172.16.0.0/12` and `192.168.0.0/16` instead
+([Configure ASP.NET Core apps: Detect HTTPS session](https://learn.microsoft.com/azure/app-service/configure-language-dotnetcore#detect-https-session)).
+On staging, on 2026-10-30, those gave an `http://` redirect URI, and adding `169.254.0.0/16` made
+it `https://`. The middleware matches IPv4-mapped IPv6 addresses such as `::ffff:169.254.x.y`
+against IPv4 networks itself, so the plain IPv4 form is enough.
+
+If the provider still reports an `http://` redirect URI, the address that was not trusted is
+logged as `Unknown proxy: …`, at Debug level, category
+`Microsoft.AspNetCore.HttpOverrides.ForwardedHeadersMiddleware`. On Linux App Service that
+category cannot be raised by an app setting, because the platform turns the dots in a setting's
+name into underscores. Trying a network instead, as above, settles it. `0.0.0.0/0` would trust
+anyone who can reach the app.
 
 Leave `ASPNETCORE_FORWARDEDHEADERS_ENABLED` unset. That framework switch believes
 `X-Forwarded-For` and `X-Forwarded-Proto` from **any** address, before these rules apply.
@@ -253,7 +261,7 @@ The hosted mock is the App Service app `app-iiot-staging-sdc-gateway-mock-<suffi
 when the parameter `gatewayMockDashboardAuthority` is set. The procedure, from the Auth0
 application to the checks, is
 [Gateway mock dashboard (one-time)](../../infra/README.md#gateway-mock-dashboard-one-time) in the
-infrastructure README. The app then has these six settings, in addition to the three
+infrastructure README. The app then has these four settings, in addition to the three
 `GatewayMock__Jwt__*` settings:
 
 | App setting | Value |
@@ -261,9 +269,7 @@ infrastructure README. The app then has these six settings, in addition to the t
 | `GatewayMock__Dashboard__Authority` | `https://<tenant domain>/` |
 | `GatewayMock__Dashboard__ClientId` | A Key Vault reference to the secret `gateway-mock-dashboard-client-id` |
 | `GatewayMock__Dashboard__ClientSecret` | A Key Vault reference to the secret `gateway-mock-dashboard-client-secret`. **Secret** |
-| `GatewayMock__ForwardedHeaders__KnownNetworks__0` | `10.0.0.0/8` |
-| `GatewayMock__ForwardedHeaders__KnownNetworks__1` | `172.16.0.0/12` |
-| `GatewayMock__ForwardedHeaders__KnownNetworks__2` | `192.168.0.0/16` |
+| `GatewayMock__ForwardedHeaders__KnownNetworks__0` | `169.254.0.0/16` |
 
 `GatewayMock__ForwardedHeaders__Enabled` is not needed: it follows the dashboard.
 

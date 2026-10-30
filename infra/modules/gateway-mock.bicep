@@ -134,20 +134,15 @@ resource app 'Microsoft.Web/sites@2025-03-01' = {
                 name: 'GatewayMock__Dashboard__ClientSecret'
                 value: '@Microsoft.KeyVault(SecretUri=${keyVault.properties.vaultUri}secrets/${dashboardClientSecretSecretName})'
               }
-              // TLS ends at App Service's front end, which connects from these private ranges.
-              // Their X-Forwarded-Proto is believed, so the sign-in's redirect URI is https://
-              // (tools/IIoT.GatewayMock/README.md, "Behind a TLS-terminating proxy").
+              // TLS ends at App Service's front end. On Linux it reaches the app's container from
+              // the link-local range, and its X-Forwarded-Proto is believed from there only, so
+              // the sign-in's redirect URI is https://. Link-local addresses are not routed, so
+              // nothing outside the host can connect from them. Not the private ranges of
+              // Microsoft's sample: with those, staging still sent http:// (2026-10-30;
+              // tools/IIoT.GatewayMock/README.md, "Behind a TLS-terminating proxy").
               {
                 name: 'GatewayMock__ForwardedHeaders__KnownNetworks__0'
-                value: '10.0.0.0/8'
-              }
-              {
-                name: 'GatewayMock__ForwardedHeaders__KnownNetworks__1'
-                value: '172.16.0.0/12'
-              }
-              {
-                name: 'GatewayMock__ForwardedHeaders__KnownNetworks__2'
-                value: '192.168.0.0/16'
+                value: '169.254.0.0/16'
               }
             ]
           : []
