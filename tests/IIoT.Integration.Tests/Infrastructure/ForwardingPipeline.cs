@@ -60,8 +60,12 @@ public sealed class ForwardingPipeline : IAsyncDisposable
         services.AddForwardingDeadLetters(configuration);
         services.Replace(ServiceDescriptor.Singleton<IDeadLetterQueue>(DeadLetters));
 
-        services.AddHttpClient(GatewayV1Forwarder.HttpClientName)
-            .ConfigurePrimaryHttpMessageHandler(() => new GatewayTrafficHandler(Traffic) { InnerHandler = gateway.Server.CreateHandler() });
+        // Both versions' clients reach the mock: which one the pipeline uses is the configuration's choice.
+        foreach (var clientName in new[] { GatewayV1Forwarder.HttpClientName, GatewayV2Forwarder.HttpClientName })
+        {
+            services.AddHttpClient(clientName)
+                .ConfigurePrimaryHttpMessageHandler(() => new GatewayTrafficHandler(Traffic) { InnerHandler = gateway.Server.CreateHandler() });
+        }
         services.AddHttpClient(ClientCredentialsTokenProvider.HttpClientName)
             .ConfigurePrimaryHttpMessageHandler(issuer.CreateTokenEndpointHandler);
 
