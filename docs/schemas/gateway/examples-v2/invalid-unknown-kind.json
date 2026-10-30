@@ -1,0 +1,10 @@
+{
+  "contractVersion": 2,
+  "deviceId": "separator-000123",
+  "messageId": "01J8F2K9QS4T7V0X3Z6B8N1M6J",
+  "receivedAt": "2026-09-14T06:00:13.25+00:00",
+  "firmware": "1.0.4",
+  "readings": [
+    { "kind": "temperature", "value": 11.5, "unit": "Cel", "at": "2026-09-14T06:00:04+00:00", "quality": "ok" }
+  ]
+}

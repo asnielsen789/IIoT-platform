@@ -68,6 +68,15 @@ public sealed record GatewayV1Batch
 
     private static GatewayV1Reading ToReading(Measurement measurement)
     {
+        // v1 has no sensor field. Dropping it would merge a device's series, an oil separator's oil
+        // and sludge levels into one, so a measurement that names its sensor needs v2 (ADR-011).
+        // The name is safe to log: the schema allows lowercase letters, digits and hyphens only.
+        if (measurement.Sensor is not null)
+        {
+            throw new ForwardingException(
+                $"Measurement '{measurement.Type}' from sensor '{measurement.Sensor}' has no mapping in gateway contract v1, which has no sensor");
+        }
+
         var (kind, unit) = (measurement.Type, measurement.Unit) switch
         {
             ("level", "mm") => ("level", "mm"),

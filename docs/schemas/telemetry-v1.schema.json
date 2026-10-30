@@ -50,19 +50,23 @@
       "properties": {
         "type": {
           "type": "string",
-          "enum": ["level"],
-          "description": "Measurement type. Only 'level' in v1. Extended additively."
+          "enum": ["level", "energy", "power", "volume", "count"],
+          "description": "Measurement type. Each type fixes its unit and its value range (allOf below). Extended additively; see docs/mqtt-payload.md, section 2, and ADR-011."
         },
         "value": {
           "type": "number",
           "minimum": 0,
-          "maximum": 20000,
-          "description": "Raw measured value. No conversion is performed on the device, per ADR-004."
+          "description": "Raw measured value, in unit. No conversion is performed on the device, per ADR-004. The upper bound depends on the type. Energy, volume and count are cumulative totals, never deltas."
         },
         "unit": {
           "type": "string",
-          "enum": ["mm"],
-          "description": "UCUM unit code."
+          "enum": ["mm", "kW.h", "kW", "L", "1"],
+          "description": "UCUM unit code, fixed by the type."
+        },
+        "sensor": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]{0,31}$",
+          "description": "Which of the device's sensors or meters took the measurement, where it has more than one: 'oil' and 'sludge' on an oil separator, 'shampoo', 'wax' and 'reclaim' on a car wash. Lowercase letters, digits and hyphens; at most 32 characters. Absent for a device's only sensor of a type."
         },
         "measuredAt": {
           "type": "string",
@@ -75,7 +79,29 @@
           "default": "ok",
           "description": "The device's own assessment of the reading's reliability."
         }
-      }
+      },
+      "allOf": [
+        {
+          "if": { "required": ["type"], "properties": { "type": { "const": "level" } } },
+          "then": { "properties": { "unit": { "const": "mm" }, "value": { "maximum": 20000 } } }
+        },
+        {
+          "if": { "required": ["type"], "properties": { "type": { "const": "energy" } } },
+          "then": { "properties": { "unit": { "const": "kW.h" }, "value": { "maximum": 1000000000 } } }
+        },
+        {
+          "if": { "required": ["type"], "properties": { "type": { "const": "power" } } },
+          "then": { "properties": { "unit": { "const": "kW" }, "value": { "maximum": 1000 } } }
+        },
+        {
+          "if": { "required": ["type"], "properties": { "type": { "const": "volume" } } },
+          "then": { "properties": { "unit": { "const": "L" }, "value": { "maximum": 1000000000000 } } }
+        },
+        {
+          "if": { "required": ["type"], "properties": { "type": { "const": "count" } } },
+          "then": { "properties": { "unit": { "const": "1" }, "value": { "type": "integer", "maximum": 9007199254740991 } } }
+        }
+      ]
     },
     "device": {
       "type": "object",

@@ -284,4 +284,30 @@ public class TelemetryValidatorTests
 
         Assert.Equal("/measurements/0/value: -12.0 should be at least 0", result.Error);
     }
+
+    /// <summary>
+    /// The per-type rules (ADR-011) test every measurement against every type. Only the rule that
+    /// applies may speak: an energy reading in millimetres is wrong about its unit, not about being
+    /// "not a level" or "not a power reading".
+    /// </summary>
+    [Fact]
+    public void Validate_RejectionByAPerTypeRule_NamesOnlyThatRule()
+    {
+        var result = TelemetryValidator.Validate(ContractFixtures.Read("invalid-unit-for-type.json"));
+
+        Assert.False(result.IsValid);
+        Assert.StartsWith("/measurements/0/unit:", result.Error, StringComparison.Ordinal);
+        Assert.Contains("kW.h", result.Error!, StringComparison.Ordinal);
+        Assert.DoesNotContain("/type", result.Error!, StringComparison.Ordinal);
+        Assert.DoesNotContain(";", result.Error!, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Validate_ASensor_IsRead()
+    {
+        var result = TelemetryValidator.Validate(ContractFixtures.Read("valid-oil-separator.json"));
+
+        Assert.True(result.IsValid, result.Error);
+        Assert.Equal(["oil", "sludge", "oil", "sludge"], result.Message!.Measurements.Select(measurement => measurement.Sensor));
+    }
 }

@@ -1,0 +1,12 @@
+{
+  "contractVersion": 2,
+  "deviceId": "charger-000123",
+  "messageId": "01J8F2K9QS4T7V0X3Z6B8N1M6A",
+  "receivedAt": "2026-09-14T06:00:13.25+00:00",
+  "firmware": "2.1.0",
+  "readings": [
+    { "kind": "energy", "value": 48211.37, "unit": "kW.h", "at": "2026-09-14T06:00:00+00:00", "quality": "ok" },
+    { "kind": "power", "value": 21.8, "unit": "kW", "at": "2026-09-14T06:00:00+00:00", "quality": "ok" },
+    { "kind": "count", "value": 1873, "unit": "1", "sensor": "sessions", "at": "2026-09-14T06:00:00+00:00", "quality": "ok" }
+  ]
+}

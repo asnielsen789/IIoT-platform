@@ -16,3 +16,4 @@ Documents the architectural decisions made in this project. Each ADR describes c
 | [008](adr-008-downstream-contract.md) | Downstream contract and forwarding context | Accepted | 2026-10-12 |
 | [009](adr-009-device-pki.md) | Device identity: X.509 certificates from an own CA | Accepted | 2026-10-19 |
 | [010](adr-010-dead-letter-handling.md) | Dead-letter handling for messages that fail to forward | Accepted | 2026-10-26 |
+| [011](adr-011-multi-type-telemetry.md) | Device types beyond the tank, and gateway contract v2 | Accepted | 2026-10-30 |

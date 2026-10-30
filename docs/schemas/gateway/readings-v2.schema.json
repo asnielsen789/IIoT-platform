@@ -1,0 +1,107 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://asnielsen789.github.io/IIoT-platform/schemas/gateway/readings-v2.schema.json",
+  "title": "Gateway readings v2",
+  "description": "Normative contract for the body of POST /v2/readings: one batch of readings the IIoT platform delivers to a downstream gateway. See docs/gateway-contract.md, section 11, and ADR-011. Version 1 with more reading kinds and an optional sensor; served alongside /v1. Receivers ignore unknown fields.",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["contractVersion", "deviceId", "messageId", "receivedAt", "firmware", "readings"],
+  "properties": {
+    "contractVersion": {
+      "type": "integer",
+      "const": 2,
+      "description": "Contract version. Always 2 under /v2."
+    },
+    "deviceId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "description": "The device identity the platform authenticated (IoT Hub's iothub-connection-device-id). Never a value the device wrote into its own payload."
+    },
+    "messageId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "description": "The device's message id. Equal to the Idempotency-Key header; unique per device, not globally."
+    },
+    "receivedAt": {
+      "type": "string",
+      "format": "date-time",
+      "description": "When the platform received the message (IoT Hub enqueued time), in UTC. Platform clock, and therefore trustworthy as absolute time."
+    },
+    "firmware": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 32,
+      "description": "The firmware version the device reported running when it sent the message."
+    },
+    "readings": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 64,
+      "description": "Every reading in the device's message, in the order the device sent them. Several entries are buffered backfill after an outage, or several sensors read at once, and arrive in one request, never split.",
+      "items": { "$ref": "#/$defs/reading" }
+    }
+  },
+  "$defs": {
+    "reading": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["kind", "value", "unit", "at", "quality"],
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": ["level", "energy", "power", "volume", "count"],
+          "description": "What was measured. Each kind fixes its unit (allOf below). Energy, volume and count are cumulative totals: a receiver derives consumption from the difference between two readings. A new kind is a breaking change for this contract, as on v1; see docs/gateway-contract.md."
+        },
+        "value": {
+          "type": "number",
+          "minimum": 0,
+          "description": "The raw measured value, in unit. No conversion is performed by the platform."
+        },
+        "unit": {
+          "type": "string",
+          "enum": ["mm", "kW.h", "kW", "L", "1"],
+          "description": "UCUM unit code, fixed by the kind."
+        },
+        "sensor": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]{0,31}$",
+          "description": "Which of the device's sensors or meters took the reading, exactly as the device named it. Absent when the device sent none. A device's series is identified by kind and sensor together."
+        },
+        "at": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Time of measurement by the device clock. May lie hours or days in the past for buffered backfill, and must not be rejected on that basis."
+        },
+        "quality": {
+          "type": "string",
+          "enum": ["ok", "uncertain", "bad"],
+          "description": "The device's own assessment of the reading. Always present: the platform applies the device contract's default."
+        }
+      },
+      "allOf": [
+        {
+          "if": { "required": ["kind"], "properties": { "kind": { "const": "level" } } },
+          "then": { "properties": { "unit": { "const": "mm" } } }
+        },
+        {
+          "if": { "required": ["kind"], "properties": { "kind": { "const": "energy" } } },
+          "then": { "properties": { "unit": { "const": "kW.h" } } }
+        },
+        {
+          "if": { "required": ["kind"], "properties": { "kind": { "const": "power" } } },
+          "then": { "properties": { "unit": { "const": "kW" } } }
+        },
+        {
+          "if": { "required": ["kind"], "properties": { "kind": { "const": "volume" } } },
+          "then": { "properties": { "unit": { "const": "L" } } }
+        },
+        {
+          "if": { "required": ["kind"], "properties": { "kind": { "const": "count" } } },
+          "then": { "properties": { "unit": { "const": "1" }, "value": { "type": "integer" } } }
+        }
+      ]
+    }
+  }
+}

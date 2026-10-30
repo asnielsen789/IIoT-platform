@@ -156,7 +156,7 @@ public static class TelemetryValidator
     private static string Describe(EvaluationResults evaluation)
     {
         var errors = Flatten(evaluation)
-            .Where(detail => detail.Errors is { Count: > 0 })
+            .Where(detail => detail.Errors is { Count: > 0 } && !IsCondition(detail))
             .SelectMany(detail => detail.Errors!.Select(error =>
             {
                 var location = detail.InstanceLocation.ToString();
@@ -183,6 +183,25 @@ public static class TelemetryValidator
         string.IsNullOrEmpty(path)
             ? ""
             : path.TrimStart('$').Replace('[', '.').Replace("]", "", StringComparison.Ordinal).Replace('.', '/');
+
+    /// <summary>
+    /// Whether the result belongs to an <c>if</c>: the schema's per-type rules (ADR-011) ask "is
+    /// this an energy measurement?" of every measurement, and a "no" is how the rule decides not to
+    /// apply, not a fault in the message. Only the <c>then</c> that does apply reports one.
+    /// </summary>
+    private static bool IsCondition(EvaluationResults detail)
+    {
+        var segments = detail.EvaluationPath.ToString().Split('/');
+        for (var i = 1; i < segments.Length; i++)
+        {
+            // A property named "if" would appear after "properties"; this schema has none, but
+            // the check stays exact.
+            if (segments[i] == "if" && segments[i - 1] != "properties")
+                return true;
+        }
+
+        return false;
+    }
 
     /// <summary>
     /// Walks the result tree. <c>OutputFormat.List</c> flattens most of it, but a nested detail

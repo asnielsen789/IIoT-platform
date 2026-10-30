@@ -1,3 +1,5 @@
+using System.Text.Json;
+
 namespace IIoT.Core.Tests.Fixtures;
 
 /// <summary>
@@ -17,7 +19,23 @@ public static class ContractFixtures
 
     public static IEnumerable<object[]> Invalid() => Names("invalid-*.json");
 
+    /// <summary>
+    /// The valid examples gateway contract v1 can carry: every measurement a <c>level</c> without a
+    /// <c>sensor</c>. The others need v2 (ADR-011).
+    /// </summary>
+    public static IEnumerable<object[]> ValidForV1() => Valid().Where(name => FitsV1((string)name[0]));
+
+    /// <summary>The valid examples with a measurement of another type, or one that names its sensor.</summary>
+    public static IEnumerable<object[]> ValidNeedingV2() => Valid().Where(name => !FitsV1((string)name[0]));
+
     public static string Read(string fileName) => File.ReadAllText(Path.Combine(Root, fileName));
+
+    private static bool FitsV1(string fileName)
+    {
+        using var document = JsonDocument.Parse(Read(fileName));
+        return document.RootElement.GetProperty("measurements").EnumerateArray()
+            .All(measurement => measurement.GetProperty("type").GetString() == "level" && !measurement.TryGetProperty("sensor", out _));
+    }
 
     private static IEnumerable<object[]> Names(string pattern) =>
         Directory.EnumerateFiles(Root, pattern)

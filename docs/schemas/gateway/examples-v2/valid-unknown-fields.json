@@ -1,0 +1,19 @@
+{
+  "contractVersion": 2,
+  "deviceId": "charger-000123",
+  "messageId": "01J8F2K9QS4T7V0X3Z6B8N1M6H",
+  "receivedAt": "2026-09-14T06:00:13Z",
+  "firmware": "2.2.0",
+  "readings": [
+    {
+      "kind": "power",
+      "value": 7.4,
+      "unit": "kW",
+      "sensor": "connector-2",
+      "at": "2026-09-14T06:00:00Z",
+      "quality": "ok",
+      "futureReadingField": "must be ignored, not rejected"
+    }
+  ],
+  "futureBatchField": { "addedIn": "a later, additive revision of v2" }
+}
