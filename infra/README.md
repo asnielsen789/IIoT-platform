@@ -521,8 +521,12 @@ see [After the infrastructure is recreated](#after-the-infrastructure-is-recreat
 Staging has no real downstream system, so the Function forwards to the gateway mock
 ([`tools/IIoT.GatewayMock`](../tools/IIoT.GatewayMock/README.md)) on App Service
 ([#15](https://github.com/asnielsen789/IIoT-platform/issues/15)). The templates create the app
-and set the Function's `GatewayV1__BaseAddress` to it, and the mock's issuer and audience to the
-Function's identity provider. The code is published by hand, like an infrastructure change: the
+and set the Function's gateway address to it, and the mock's issuer and audience to the
+Function's identity provider. Which contract version the Function speaks is the parameter
+`gatewayContractVersion`: staging uses 2 (ADR-011,
+[#79](https://github.com/asnielsen789/IIoT-platform/issues/79)), so the address is written as
+`GatewayV2__BaseAddress` and the Function forwards on `/v2/readings`; with 1 it is
+`GatewayV1__BaseAddress` and `/v1/readings`. The mock speaks both. The code is published by hand, like an infrastructure change: the
 deploy workflow covers the Function only.
 
 Publish after the first infrastructure deployment that creates the app, and after any change to
@@ -1824,8 +1828,9 @@ duration.
 The Function's downstream gateway in staging, so that a message can be followed from the device
 to a receiver ([#15](https://github.com/asnielsen789/IIoT-platform/issues/15)). It is a mock, not
 a gateway: it checks the bearer token and the readings contract, and keeps what it accepts in
-memory. An operator with a real downstream system drops the module and points
-`GatewayV1__BaseAddress` at that system instead.
+memory. An operator with a real downstream system drops the module and points the Function's
+gateway address at that system instead, with `gatewayContractVersion` set to the version it
+speaks.
 
 - **App Service, free tier (F1), Linux.** It costs nothing, serves HTTPS on its
   `azurewebsites.net` name with a platform certificate, and has the .NET 10 runtime built in, so

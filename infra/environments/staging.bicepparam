@@ -44,6 +44,10 @@ param gatewayMockLocation = 'swedencentral'
 // "Gateway mock dashboard (one-time)").
 param gatewayMockDashboardAuthority = 'https://iiot-staging.eu.auth0.com/'
 
+// Gateway contract v2 (ADR-011, #79): the mock speaks it, and the fleet's chargers, car washes and
+// oil separators need it. With 1, their messages fail to forward with the reason.
+param gatewayContractVersion = 2
+
 // The repository whose deploy workflow may deploy the Function's code (#5). It was created after
 // 15 July 2026, so GitHub issues it OIDC subjects in the immutable form, with the owner's and the
 // repository's numeric IDs after the names: a deleted and re-created, or renamed and re-used,

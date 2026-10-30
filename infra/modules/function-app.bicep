@@ -55,8 +55,15 @@ param gatewayAuthClientIdSecretUri string
 @description('Versionless URI of the Key Vault secret holding the gateway OAuth client secret.')
 param gatewayAuthClientSecretSecretUri string
 
-@description('Base address of the downstream gateway (GatewayV1:BaseAddress). HTTPS: the forwarder refuses anything else.')
+@description('Base address of the downstream gateway. HTTPS: the forwarder refuses anything else.')
 param gatewayBaseAddress string
+
+@description('Which version of the gateway contract the Function speaks (ADR-011): 1, levels only, or 2, every reading kind with its sensor. The base address is written to that version\'s setting.')
+@allowed([
+  1
+  2
+])
+param gatewayContractVersion int = 1
 
 @description('Queue service endpoint of the account holding the dead-letter queues (DeadLetterStorage:queueServiceUri, ADR-010).')
 param deadLetterQueueServiceUri string
@@ -190,11 +197,13 @@ resource functionApp 'Microsoft.Web/sites@2025-03-01' = {
           name: 'GatewayAuth__ClientSecret'
           value: '@Microsoft.KeyVault(SecretUri=${gatewayAuthClientSecretSecretUri})'
         }
-        // Where the forwarder sends readings (#15): {GatewayV1:BaseAddress}/v1/readings. Without
-        // it, every message ends as ForwardingFailed with "BaseAddress is not configured", and
-        // no token is ever fetched, since the address is checked first.
+        // Where the forwarder sends readings (#15): {BaseAddress}/v{n}/readings. The setting's
+        // section is the contract version: GatewayV2__BaseAddress switches the Function to v2
+        // (ADR-011), and only one of the two is ever set. Without it, every message ends as
+        // ForwardingFailed with "BaseAddress is not configured", and no token is ever fetched,
+        // since the address is checked first.
         {
-          name: 'GatewayV1__BaseAddress'
+          name: 'GatewayV${gatewayContractVersion}__BaseAddress'
           value: gatewayBaseAddress
         }
         // The dead-letter queues (ADR-010): the connection the RetryForwarding trigger reads, and the

@@ -48,6 +48,13 @@ param gatewayAuthIssuer string
 ])
 param gatewayMockLocation string = location
 
+@description('Which version of the gateway contract the Function forwards with (ADR-011): 1, levels only, or 2, every reading kind with its sensor. The gateway must speak it; the gateway mock speaks both.')
+@allowed([
+  1
+  2
+])
+param gatewayContractVersion int = 1
+
 @description('OpenID Connect issuer people sign in to the gateway mock\'s dashboard with (#47), with its trailing slash; for Auth0, `https://<tenant domain>/`. Empty leaves the dashboard off. When set, the secrets `gateway-mock-dashboard-client-id` and `gateway-mock-dashboard-client-secret` must exist in the vault first. Not a secret.')
 param gatewayMockDashboardAuthority string = ''
 
@@ -310,6 +317,7 @@ module functionApp 'modules/function-app.bicep' = {
     gatewayAuthClientIdSecretUri: '${keyVault.outputs.uri}secrets/${gatewayAuthClientIdSecretName}'
     gatewayAuthClientSecretSecretUri: '${keyVault.outputs.uri}secrets/${gatewayAuthClientSecretSecretName}'
     gatewayBaseAddress: 'https://${gatewayMock.outputs.defaultHostName}'
+    gatewayContractVersion: gatewayContractVersion
     deadLetterQueueServiceUri: storage.outputs.queueServiceUri
   }
   dependsOn: [
