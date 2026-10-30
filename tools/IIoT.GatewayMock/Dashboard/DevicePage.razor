@@ -1,6 +1,7 @@
 @*
-    One device: its latest reading, its level trend and its message history, newest first. With a
-    message chosen, the same page is rendered with that message in a modal over it.
+    One device: the latest reading of each of its series, a chart per kind it measures, and its
+    message history, newest first (ADR-011). With a message chosen, the same page is rendered with
+    that message in a modal over it.
 
     The modal needs no script. It is the page at its own address (?id=…&message=…), drawn over the
     history; its close button and its backdrop are links back to the page without it. That
@@ -14,23 +15,26 @@
             <Icon Name="chevron" Size="14" />
             <span class="mono">@Device.DeviceId</span>
         </nav>
-        <h1><Icon Name="tank" Size="26" /><span class="mono">@Device.DeviceId</span></h1>
+        <h1><Icon Name="@Device.Type.Icon" Size="26" /><span class="mono">@Device.DeviceId</span><span class="kind">@Device.Type.Label</span></h1>
 
-        <section class="tiles" aria-label="Latest reading">
-            <div class="tile">
-                <span class="badge-icon"><Icon Name="readings" /></span>
-                <div>
-                    <div class="label">Latest level</div>
-                    <div class="value">@DashboardFormat.Show(Device.Latest?.Value) <small>@Device.Latest?.Unit</small></div>
+        <section class="tiles" aria-label="Latest readings">
+            @foreach (var series in Device.Series)
+            {
+                <div class="tile">
+                    <span class="badge-icon"><Icon Name="@KindIcon(series.Key.Kind)" /></span>
+                    <div>
+                        <div class="label">@series.Key.Label</div>
+                        <div class="value">@DashboardFormat.Show(series.Reading.Value) <small>@DashboardKinds.Unit(series.Reading.Unit)</small></div>
+                        <div class="sub" title="@series.Reading.At">
+                            @(DashboardFormat.Ago(series.Reading.At, Snapshot.TakenAt) ?? DashboardFormat.Show(series.Reading.At))
+                            @if (series.Reading.Quality is "uncertain" or "bad")
+                            {
+                                <QualityBadge Quality="@series.Reading.Quality" />
+                            }
+                        </div>
+                    </div>
                 </div>
-            </div>
-            <div class="tile">
-                <span class="badge-icon"><Icon Name="clock" /></span>
-                <div>
-                    <div class="label">Measured</div>
-                    <div class="value" title="@Device.Latest?.At">@(DashboardFormat.Ago(Device.Latest?.At, Snapshot.TakenAt) ?? DashboardFormat.Show(Device.Latest?.At))</div>
-                </div>
-            </div>
+            }
             <div class="tile">
                 <span class="badge-icon"><Icon Name="message" /></span>
                 <div><div class="label">Messages</div><div class="value">@Device.MessageCount</div></div>
@@ -41,14 +45,17 @@
             </div>
         </section>
 
-        <section class="card">
-            <header>
-                <Icon Name="chart" />
-                <h2>Level trend</h2>
-                <span class="note">Newest @DeviceSnapshot.MaxTrendReadings readings at most</span>
-            </header>
-            <LevelChart Trend="@Snapshot.Trend" />
-        </section>
+        @foreach (var trend in Snapshot.Trends)
+        {
+            <section class="card">
+                <header>
+                    <Icon Name="chart" />
+                    <h2>@DashboardKinds.Label(trend.Kind)@(DashboardKinds.Unit(trend.Unit) is { Length: > 0 } unit ? $" ({unit})" : "")</h2>
+                    <span class="note">Newest @DeviceSnapshot.MaxTrendReadings readings per series at most</span>
+                </header>
+                <TrendChart Trend="@trend" />
+            </section>
+        }
 
         <section class="card">
             <header>
@@ -124,6 +131,8 @@
                             <dd class="mono">@selected.Batch.MessageId</dd>
                             <dt>Delivered by</dt>
                             <dd class="mono">@DashboardFormat.Show(selected.Batch.Caller)</dd>
+                            <dt>Contract</dt>
+                            <dd>@(selected.Batch.ContractVersion is { } version ? $"v{version}" : DashboardFormat.Absent)</dd>
                         </dl>
                         <pre class="json" aria-label="The body as received">@foreach (var token in selected.Json){<span class="@token.Kind">@token.Text</span>}</pre>
                     </div>
@@ -150,9 +159,17 @@
 
     private DeviceSummary Device => Snapshot.Device;
 
-    /// <summary>The lowest to the highest value in the batch, or its one value.</summary>
+    /// <summary>
+    /// What the batch holds, in a few words: for one series the lowest to the highest value (or its
+    /// one value), for several the series themselves.
+    /// </summary>
     private static string Range(BatchView batch)
     {
+        if (batch.Series.Count > 1)
+        {
+            return string.Join(", ", batch.Series.Select(series => series.Label));
+        }
+
         var values = batch.Readings.Where(reading => reading.Number is not null).ToList();
         if (values.Count == 0)
         {
@@ -161,10 +178,19 @@
 
         var low = values.MinBy(reading => reading.Number)!;
         var high = values.MaxBy(reading => reading.Number)!;
-        var unit = low.Unit is null ? "" : " " + low.Unit;
+        var unit = DashboardKinds.Unit(low.Unit) is { Length: > 0 } shown ? " " + shown : "";
 
         return ReferenceEquals(low, high) || low.Value == high.Value
             ? $"{low.Value}{unit}"
             : $"{low.Value}–{high.Value}{unit}";
     }
+
+    /// <summary>The icon a series' tile is drawn with.</summary>
+    private static string KindIcon(string? kind) => kind switch
+    {
+        "energy" or "power" => "bolt",
+        "volume" => "drop",
+        "count" => "hash",
+        _ => "readings"
+    };
 }

@@ -29,6 +29,9 @@
     <Content Include="..\..\docs\schemas\gateway\examples\*.json"
       Link="Fixtures\Gateway\%(Filename)%(Extension)"
       CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="..\..\docs\schemas\gateway\examples-v2\*.json"
+      Link="Fixtures\GatewayV2\%(Filename)%(Extension)"
+      CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
   <ItemGroup>

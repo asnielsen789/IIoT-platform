@@ -118,10 +118,10 @@ public class DashboardSnapshotTests
         Add(store, "tank-000001", "live", ("1500", "2026-09-14T06:00:00Z"));
         Add(store, "tank-000001", "backfill", ("1400", "2026-09-13T18:00:00Z"), ("1450", "2026-09-13T22:00:00Z"));
 
-        var trend = DeviceSnapshot.Create(store.Batches, "tank-000001", null, Now)!.Trend;
+        var points = Assert.Single(Assert.Single(DeviceSnapshot.Create(store.Batches, "tank-000001", null, Now)!.Trends).Lines).Points;
 
-        Assert.Equal(["1400", "1450", "1500"], trend.Points.Select(point => point.Reading.Value));
-        Assert.True(trend.Points[0].X < trend.Points[1].X && trend.Points[1].X < trend.Points[2].X);
+        Assert.Equal(["1400", "1450", "1500"], points.Select(point => point.Reading.Value));
+        Assert.True(points[0].X < points[1].X && points[1].X < points[2].X);
 
         var many = new ReadingStore();
         for (var i = 0; i < DeviceSnapshot.MaxTrendReadings + 10; i++)
@@ -129,9 +129,35 @@ public class DashboardSnapshotTests
             Add(many, "tank-000001", $"m{i:D3}", ($"{i}", $"2026-09-14T06:{i / 60:D2}:{i % 60:D2}Z"));
         }
 
-        var capped = DeviceSnapshot.Create(many.Batches, "tank-000001", null, Now)!.Trend;
-        Assert.Equal(DeviceSnapshot.MaxTrendReadings, capped.Points.Count);
-        Assert.Equal("10", capped.Points[0].Reading.Value);
+        var capped = Assert.Single(Assert.Single(DeviceSnapshot.Create(many.Batches, "tank-000001", null, Now)!.Trends).Lines).Points;
+        Assert.Equal(DeviceSnapshot.MaxTrendReadings, capped.Count);
+        Assert.Equal("10", capped[0].Reading.Value);
+    }
+
+    /// <summary>
+    /// A car wash delivered on v2 (ADR-011): five series, each with its latest reading, a chart per
+    /// kind with a line per sensor, and the type it looks like.
+    /// </summary>
+    [Fact]
+    public void Device_OfSeveralSeries_HasEachSeries_AndAChartPerKind()
+    {
+        var store = new ReadingStore();
+        using (var document = JsonDocument.Parse(ContractFixtures.ReadGatewayV2("valid-car-wash.json")))
+        {
+            store.TryAdd("wash-000123", "m1", document.RootElement, caller: null, Now);
+        }
+
+        var snapshot = DeviceSnapshot.Create(store.Batches, "wash-000123", "m1", Now)!;
+
+        Assert.Equal(DeviceType.CarWash, snapshot.Device.Type);
+        Assert.Equal(
+            ["Level · reclaim", "Level · shampoo", "Level · wax", "Volume · water", "Count · cycles"],
+            snapshot.Device.Series.Select(series => series.Key.Label));
+        Assert.Equal("uncertain", snapshot.Device.WorstLatestQuality);
+        Assert.Equal(["level", "volume", "count"], snapshot.Trends.Select(trend => trend.Kind));
+        Assert.Equal(["reclaim", "shampoo", "wax"], snapshot.Trends[0].Lines.Select(line => line.Sensor));
+        Assert.Equal(2, snapshot.Selected!.Batch.ContractVersion);
+        Assert.Equal(5, snapshot.NewestBatches[0].Series.Count);
     }
 
     [Theory]
@@ -193,7 +219,7 @@ public class DashboardSnapshotTests
 
         var batch = Assert.Single(snapshot.NewestBatches);
         Assert.Null(snapshot.Device.Latest!.Value);
-        Assert.Empty(snapshot.Trend.Points);
+        Assert.Empty(snapshot.Trends);
         Assert.NotEmpty(snapshot.Selected!.Json);
         Assert.Null(batch.ReceivedAt);
         Assert.Null(batch.Firmware);

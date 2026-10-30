@@ -69,15 +69,19 @@ public static class GatewayRequests
     /// </summary>
     public const string Route = "/v1/readings";
 
+    /// <summary>Gateway contract v2's path (ADR-011).</summary>
+    public const string RouteV2 = "/v2/readings";
+
     public const string IdempotencyKeyHeader = "Idempotency-Key";
 
     public static HttpRequestMessage PostReadings(
         string body,
         string? bearerToken,
         string? idempotencyKey,
-        string contentType = "application/json")
+        string contentType = "application/json",
+        string route = Route)
     {
-        var request = new HttpRequestMessage(HttpMethod.Post, Route)
+        var request = new HttpRequestMessage(HttpMethod.Post, route)
         {
             Content = new StringContent(body, Encoding.UTF8, contentType)
         };

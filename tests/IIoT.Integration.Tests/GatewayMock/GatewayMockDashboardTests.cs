@@ -104,6 +104,45 @@ public class GatewayMockDashboardTests : IClassFixture<DashboardFixture>
     }
 
     /// <summary>
+    /// A device of several series, delivered on contract v2 (ADR-011): the overview names its type
+    /// and shows the latest value of each series, its page has a chart per kind, and the message
+    /// view says which contract version delivered it.
+    /// </summary>
+    [Fact]
+    public async Task Dashboard_DeviceOfSeveralSeries_ShowsEachSeriesAndAChartPerKind()
+    {
+        const string DeviceId = "wash-dashboard-1";
+        var messageId = GatewayRequests.NewMessageId();
+        var body = System.Text.Json.Nodes.JsonNode.Parse(ContractFixtures.ReadGatewayV2("valid-car-wash.json"))!.AsObject();
+        body["deviceId"] = DeviceId;
+        body["messageId"] = messageId;
+        using (var request = GatewayRequests.PostReadings(body.ToJsonString(), _dashboard.Issuer.CreateToken(), messageId, route: GatewayRequests.RouteV2))
+        using (var delivered = await _dashboard.Factory.CreateClient().SendAsync(request))
+        {
+            Assert.Equal(HttpStatusCode.Accepted, delivered.StatusCode);
+        }
+
+        var (browser, _) = await _dashboard.SignInAsync();
+        using (browser)
+        {
+            // Decoded first: Razor writes the · in a series' name as &#xB7;, like every non-ASCII character.
+            var overview = WebUtility.HtmlDecode(await GetPageAsync(browser, DashboardFixture.DashboardPath));
+            Assert.Contains("Car wash", overview, StringComparison.Ordinal);
+            Assert.Contains("Level · shampoo", overview, StringComparison.Ordinal);
+            Assert.Contains("1834567", overview, StringComparison.Ordinal);
+
+            var device = WebUtility.HtmlDecode(await GetPageAsync(browser, DashboardLinks.Device(DeviceId)));
+            Assert.Equal(3, System.Text.RegularExpressions.Regex.Count(device, "role=\"img\""));
+            Assert.Contains("Volume (L)", device, StringComparison.Ordinal);
+            Assert.Contains("Count · cycles", device, StringComparison.Ordinal);
+
+            var message = await GetPageAsync(browser, DashboardLinks.Message(DeviceId, messageId));
+            Assert.Contains("<dd>v2</dd>", message, StringComparison.Ordinal);
+            Assert.Contains("&quot;sensor&quot;", message, StringComparison.Ordinal);
+        }
+    }
+
+    /// <summary>
     /// An address from before a restart, or a mistyped one, is a 404 page with a way back, served
     /// as carefully as the others.
     /// </summary>

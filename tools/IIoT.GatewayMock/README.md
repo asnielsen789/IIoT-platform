@@ -1,8 +1,9 @@
 # IIoT.GatewayMock — downstream gateway stand-in
 
 A minimal ASP.NET Core API that stands in for the downstream gateway. It implements the receiving
-side of the [gateway contract](../../docs/gateway-contract.md) — `POST /v1/readings` — and
-nothing else. A development tool: it is never deployed as part of the platform.
+side of the [gateway contract](../../docs/gateway-contract.md), in both its versions:
+`POST /v1/readings` and `POST /v2/readings`
+([ADR-011](../../docs/adr/adr-011-multi-type-telemetry.md)), and nothing else. A development tool: it is never deployed as part of the platform.
 
 > **No secrets belong in the API's configuration.** It verifies tokens with *public* keys and an
 > issuer URL, neither of which is secret, and it refuses to start if handed a private key. The
@@ -17,12 +18,17 @@ nothing else. A development tool: it is never deployed as part of the platform.
    invalid token is `401`, before anything looks at the body.
 2. **`Content-Type: application/json`** — otherwise `415`.
 3. **`Idempotency-Key`** — present, and equal to the body's `messageId` — otherwise `400`.
-4. **The body against the schema** — [`readings-v1.schema.json`](../../docs/schemas/gateway/readings-v1.schema.json),
-   linked into the assembly from `docs/` so it validates against the published bytes. A failure is
-   `400` with the reason as RFC 9457 problem details.
+4. **The body against the path's schema** —
+   [`readings-v1.schema.json`](../../docs/schemas/gateway/readings-v1.schema.json) on `/v1`,
+   [`readings-v2.schema.json`](../../docs/schemas/gateway/readings-v2.schema.json) on `/v2`, each
+   linked into the assembly from `docs/` so it validates against the published bytes. Each
+   version takes only its own bodies: `contractVersion` must match the path. A failure is `400`
+   with the reason as RFC 9457 problem details. v2's per-kind rules ask every reading whether it
+   is each kind, and a "no" is not reported, so the reason names only the rule that was broken.
 
 A batch that passes is stored in memory and answered `202 Accepted`. A replay — same device, same
-key — is answered `202` too, and nothing is stored twice.
+key — is answered `202` too, and nothing is stored twice. A message is one message whichever
+version delivers it: delivered on `/v1` and replayed on `/v2`, it is stored once.
 
 The mock deliberately does **not** reference `IIoT.Core`. If it judged requests with the
 platform's own types, the forwarder and the mock could agree with each other while both
@@ -95,19 +101,29 @@ Three views, in red and white
 ([#77](https://github.com/asnielsen789/IIoT-platform/issues/77)):
 
 - **The overview** (`/dashboard`): totals (devices, messages, readings, the last message) and
-  one row per device: its latest level and quality, when that was measured, when its last
-  message arrived, its message count and its firmware. A row opens the device. "Latest" means
-  latest by measurement time, not by arrival, so a late backfill or a redelivered message never
-  displaces a newer reading.
-- **A device** (`/dashboard/device?id=<device>`): its latest reading, a chart of its level over
-  time (its newest 100 readings, by measurement time, coloured by quality), and its message
-  history, newest first (the newest 100): when the platform received each message, its
-  `messageId` (which is also the `Idempotency-Key`), its readings, its worst quality and its
+  one row per device: what type it looks like, the latest value of each of its series, the worst
+  quality among them, when the newest was measured, when its last message arrived, its message
+  count and its firmware. A row opens the device. "Latest" means latest by measurement time, not
+  by arrival, so a late backfill or a redelivered message never displaces a newer reading.
+- **A device** (`/dashboard/device?id=<device>`): the latest reading of each series, a chart per
+  kind it measures (its newest 100 readings per series, by measurement time, a line per sensor,
+  each reading's quality as the ring around its dot), and its message history, newest first (the
+  newest 100): when the platform received each message, its `messageId` (which is also the
+  `Idempotency-Key`), its readings, its worst quality and its
   firmware. A replay is acknowledged but not stored again, so it never appears twice.
 - **A message** (`&message=<messageId>` added to the device's address): a modal over the device's
   page with the batch as the mock stored it, as indented, coloured JSON, and its metadata: when
   the platform received it, when the mock stored it, its `Idempotency-Key`, and the authenticated
   caller (the token's `sub`). Its close button and its backdrop are links back to the device.
+
+**Series and device types** ([ADR-011](../../docs/adr/adr-011-multi-type-telemetry.md)). A
+series is a reading kind and, where a device has several sensors of that kind, the sensor: an oil
+separator has `Level · oil` and `Level · sludge`. A kind's sensors share one chart and one scale,
+as they share the unit. For the cumulative kinds, `energy`, `volume` and `count`, the line is the
+meter's running total, so its slope is the rate of use. The type a device is shown as (tank, EV
+charger, car wash, oil separator) is a guess from the series it sends, for presentation only: the
+contract has no device type, and readings are judged by kind. Units are shown as people write them
+(`kW.h` as kWh; a count's `1` not at all).
 
 Device and message IDs are in the query string, escaped, because either may hold any character,
 `/` included. An address the mock no longer knows, from before a restart, is a 404 page with a
@@ -321,7 +337,9 @@ Always On), empties them. There is no SQLite or other persistence, for three rea
 `tests/IIoT.Integration.Tests` hosts the mock in-process with `WebApplicationFactory` — no
 socket is opened — and covers:
 
-- every `valid-` gateway example is accepted, every `invalid-` one rejected with a reason;
+- every `valid-` gateway example of both versions is accepted, every `invalid-` one rejected with
+  a reason, on its own path; each version refuses the other's bodies; a message delivered on both is
+  stored once;
 - no token, and tokens that are expired, not yet valid, for another audience, from another
   issuer, signed by an untrusted key, unsigned, or HS256-signed with the public key — all `401`;
 - replays acknowledged without a duplicate, keys scoped per device;
@@ -331,7 +349,8 @@ socket is opened — and covers:
 - the dashboard, disabled: its paths are `404` with a valid token, and no other scheme exists;
 - the dashboard, enabled, against an in-process OpenID Connect provider that checks the client
   secret, the redirect URI and the PKCE verifier: the sign-in redirect carries a PKCE challenge;
-  a signed-in browser sees the stored batches; markup in a device ID, message ID, firmware or user
+  a signed-in browser sees the stored batches, and a device of several series its series and a
+  chart per kind; markup in a device ID, message ID, firmware or user
   name is rendered as text; the session cookie alone gets `401` from the API; a bearer token alone
   does not open the dashboard; a code injected into another sign-in issues no session; the
   cookie's attributes; sign-out at both ends, with an `id_token_hint` the provider issued;
