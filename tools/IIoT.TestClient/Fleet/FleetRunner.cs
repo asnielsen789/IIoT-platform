@@ -47,6 +47,16 @@ public sealed class FleetRunner
         var devices = Select(FleetFile.Load(_options.FleetFile));
         var now = _now();
 
+        if (_options.List)
+        {
+            foreach (var device in devices)
+            {
+                await _log.WriteLineAsync(device.Id);
+            }
+
+            return 0;
+        }
+
         await _log.WriteLineAsync(
             $"{devices.Count} device(s), {_options.Schedule.Window.TotalHours:0.##} h of history: a sample every " +
             $"{_options.Schedule.SampleEvery.TotalMinutes:0} min, a message every {_options.Schedule.SendEvery.TotalMinutes:0} min" +

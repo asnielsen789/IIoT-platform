@@ -10,13 +10,15 @@ namespace IIoT.TestClient.Configuration;
 /// <param name="Schedule">How far back, and how often devices measure and send.</param>
 /// <param name="Devices">The devices to run, or empty for all of them.</param>
 /// <param name="DryRun">Build and print the messages, connect to nothing.</param>
+/// <param name="List">Print the selected devices' IDs, one a line, and nothing else: for scripts.</param>
 public sealed record FleetOptions(
     string? Hub,
     string FleetFile,
     string SecretsDirectory,
     FleetSchedule Schedule,
     IReadOnlyList<string> Devices,
-    bool DryRun)
+    bool DryRun,
+    bool List = false)
 {
     /// <summary>The resolved hub hostname.</summary>
     public string HostName => IotHubHost.Resolve(Hub!);

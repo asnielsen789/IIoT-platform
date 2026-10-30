@@ -315,8 +315,16 @@ dotnet run --project tools/IIoT.TestClient -- fleet --hub <hub>
 - **One certificate per device**, found by its ID in `~/.secrets/iiot` (`--secrets` to change it):
   `<id>.chain.pem` or `<id>.cert.pem`, and `<id>.key.pem`, as `create-csr` and
   `IIoT.DeviceCa issue` write them. A device without them is skipped and said so; the others
-  still send. The hub must know each device already: provision it first
-  ([Zero-touch provisioning](#zero-touch-provisioning)).
+  still send. The hub must know each device already: provision the fleet first with
+  [`tools/provision-fleet.sh`](../provision-fleet.sh), which does for every device what
+  [Zero-touch provisioning](#zero-touch-provisioning) does for one (`create-csr`,
+  `IIoT.DeviceCa issue --no-register`, `provision --no-send`), skipping what a device has already.
+  It leaves alone a device the hub knows by other means, a shared access key or a CA-signed
+  identity from `issue --hub`, since provisioning it through DPS would replace that credential:
+
+  ```sh
+  tools/provision-fleet.sh --vault <vault> --hub <hub> --id-scope <id scope>
+  ```
 - **The same every run.** A device's simulation is seeded from its ID, so its values repeat for
   the same window; only the message IDs are new, so a history sent twice is two histories.
 - **Within the contract.** A message carries at most 12 samples, 60 measurements for a car wash,
