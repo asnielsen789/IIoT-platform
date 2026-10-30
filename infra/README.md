@@ -26,7 +26,7 @@ monitoring.
 | `modules/iot-hub.bicep` | IoT Hub: shared access policies, message routing, the Function's consumer group, resource logs |
 | `modules/iot-hub-connection-secret.bicep` | Builds the Function's IoT Hub connection string and writes it to Key Vault |
 | `modules/function-app.bicep` | Flex Consumption plan and Function App |
-| `modules/gateway-mock.bicep` | The gateway mock on App Service (free tier), the Function's downstream gateway in staging ([Gateway mock](#gateway-mock)) |
+| `modules/gateway-mock.bicep` | The gateway mock on App Service (free tier), the Function's downstream gateway in staging ([Gateway mock](#gateway-mock)), and optionally its dashboard's identity and Key Vault references ([Gateway mock dashboard (one-time)](#gateway-mock-dashboard-one-time)) |
 | `modules/provisioning-service.bicep` | The Device Provisioning Service, linked to the IoT Hub through the hub's `dps-link` policy, for zero-touch provisioning ([Device Provisioning Service](#device-provisioning-service)) |
 | `modules/github-deployment.bicep` | Managed identity the deploy workflow logs in with: its GitHub federated credential and its role on the Function App |
 
@@ -558,6 +558,103 @@ az webapp log tail --resource-group "$RG" --name "$MOCK_APP"
 
 The mock keeps what it accepts in memory, so a restart, or the app unloading when idle, empties
 it.
+
+## Gateway mock dashboard (one-time)
+
+The mock's read-only dashboard, at `https://<mock host>/dashboard`, shows what it has received
+([#47](https://github.com/asnielsen789/IIoT-platform/issues/47)). People sign in with OpenID
+Connect, through the same Auth0 tenant as the Function, but with an application of their own. Its
+client ID and secret are in Key Vault, and the app reads them through Key Vault references with
+its own identity ([Gateway mock](#gateway-mock-1) under the design notes). What the dashboard
+shows and how its sign-in works are in the
+[mock's README](../tools/IIoT.GatewayMock/README.md#dashboard).
+
+### 1. Create the dashboard's application
+
+Create a **Regular Web Application** in the tenant, set up as in
+[At the identity provider](../tools/IIoT.GatewayMock/README.md#at-the-identity-provider) in the
+mock's README. Its `<mock host>` is the app's host name:
+
+```sh
+MOCK_APP=$(output gatewayMockAppName)
+echo "https://$MOCK_APP.azurewebsites.net/dashboard/signin-oidc"
+echo "https://$MOCK_APP.azurewebsites.net/dashboard/signout-callback-oidc"
+```
+
+Those are the Allowed Callback URL and the Allowed Logout URL. The application's **Client ID**
+and **Client Secret** go into Key Vault next.
+
+### 2. Write the dashboard's credentials into Key Vault
+
+Before the infrastructure deployment that turns the dashboard on. The template grants the app
+access to each secret by name, and a role assignment on a secret that does not exist fails the
+deployment. As in step 2 of
+[Service-to-service authentication](#2-write-the-credentials-into-key-vault), this needs Key
+Vault Secrets Officer on the vault for the duration. The client ID is not secret, but it is kept
+next to the secret, out of the repository, as for the Function:
+
+```sh
+ME=$(az ad signed-in-user show --query id -o tsv | tr -d '\r')
+KV_ID=$(az keyvault show --name "$KEY_VAULT" --resource-group "$RG" --query id -o tsv | tr -d '\r')
+MSYS_NO_PATHCONV=1 az role assignment create --assignee-object-id "$ME" --assignee-principal-type User \
+  --role "Key Vault Secrets Officer" --scope "$KV_ID" -o none
+
+read -r -p "Dashboard client ID: " DASHBOARD_CLIENT_ID
+az keyvault secret set --vault-name "$KEY_VAULT" --name gateway-mock-dashboard-client-id \
+  --value "$DASHBOARD_CLIENT_ID" --query name -o tsv
+
+read -rs -p "Dashboard client secret: " DASHBOARD_CLIENT_SECRET && echo
+az keyvault secret set --vault-name "$KEY_VAULT" --name gateway-mock-dashboard-client-secret \
+  --value "$DASHBOARD_CLIENT_SECRET" --query name -o tsv
+
+unset DASHBOARD_CLIENT_ID DASHBOARD_CLIENT_SECRET
+MSYS_NO_PATHCONV=1 az role assignment delete --assignee "$ME" --role "Key Vault Secrets Officer" --scope "$KV_ID"
+```
+
+### 3. Deploy, then refresh the mock's references
+
+`gatewayMockDashboardAuthority` in the parameter file switches the dashboard on: the tenant's
+issuer, `https://<tenant domain>/`. Deploy the infrastructure as in [Deploy](#deploy), including
+step 5 for the Function.
+
+On this first deployment the app restarts with its new settings before its role assignments
+exist, so its two references fail to resolve, and the mock starts with the reference text as its
+client ID. Refresh them once the roles have applied, as step 5 does for the Function, then
+restart the app so the mock reads the resolved values:
+
+```sh
+MOCK_REFS="https://management.azure.com/subscriptions/{subscriptionId}/resourceGroups/$RG/providers/Microsoft.Web/sites/$MOCK_APP/config/configreferences/appsettings"
+az rest --method post --url "$MOCK_REFS/refresh?api-version=2022-03-01"
+for setting in GatewayMock__Dashboard__ClientId GatewayMock__Dashboard__ClientSecret; do
+  printf '%s: ' "$setting"
+  az rest --method get --url "$MOCK_REFS/$setting?api-version=2022-03-01" --query "properties.status" -o tsv
+done
+az webapp restart --resource-group "$RG" --name "$MOCK_APP"
+```
+
+Expect `Resolved` for both. `AccessToKeyVaultDenied` means the roles have not applied yet: wait a
+few minutes and refresh again. Later deployments need no refresh: they rewrite the app's
+settings, and a configuration change makes App Service resolve the references again. The secrets
+themselves do not rotate with the IoT Hub keys.
+
+The dashboard needs the mock's code from 2026-10-26 or later. Publish it as in
+[Gateway mock](#gateway-mock) if the app runs older code.
+
+### 4. Check the dashboard
+
+It worked when all of these hold:
+
+- `az webapp log tail --resource-group "$RG" --name "$MOCK_APP"` shows `Dashboard enabled at
+  /dashboard` after the restart.
+- `https://<mock host>/dashboard` redirects to the tenant's sign-in page, and that page's address
+  contains `redirect_uri=https%3A%2F%2F<mock host>%2Fdashboard%2Fsignin-oidc`: HTTPS, and the
+  app's own host.
+- Signing in shows the dashboard, and sign-out returns to the sign-in page.
+- `POST /v1/readings` without a token is still `401`.
+
+To turn the dashboard off, set `gatewayMockDashboardAuthority` to `''` and deploy. The app then
+loses its identity and its settings. Its role assignments stay until they are deleted, and they
+grant nothing to an identity that no longer exists.
 
 ## Dead-lettered messages
 
@@ -1747,8 +1844,14 @@ memory. An operator with a real downstream system drops the module and points
   the names change, so the next deployment creates a new app; publish to it and delete the old
   plan and app. A plan's quota can be checked without creating anything by validating a minimal
   template with `az deployment group validate`.
-- **No Azure access.** No managed identity, no Key Vault, no role assignment: its configuration
-  is the issuer and the audience it accepts tokens for, both public.
+- **No Azure access for the API.** Its configuration is the issuer and the audience it accepts
+  tokens for, both public.
+- **The dashboard reads two secrets, and nothing else.** With `gatewayMockDashboardAuthority`
+  set, the app gets a system-assigned identity and Key Vault Secrets User on exactly the two
+  secrets `gateway-mock-dashboard-client-id` and `gateway-mock-dashboard-client-secret`, scoped
+  to each secret rather than the vault. The vault also holds the Function's IoT Hub connection
+  string and gateway credentials, which the mock cannot read. Without the parameter, the app has
+  no identity and no role ([Gateway mock dashboard (one-time)](#gateway-mock-dashboard-one-time)).
 - **Basic-auth publishing off** (`scm` and `ftp`), so no publishing password exists to leak;
   `az webapp deploy` uses Microsoft Entra ID. HTTPS only, TLS 1.2 minimum, FTP disabled.
 - **Its log stays on the app** (file system, three days), for `az webapp log tail`. Nothing goes

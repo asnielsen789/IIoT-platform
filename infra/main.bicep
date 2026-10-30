@@ -48,6 +48,9 @@ param gatewayAuthIssuer string
 ])
 param gatewayMockLocation string = location
 
+@description('OpenID Connect issuer people sign in to the gateway mock\'s dashboard with (#47), with its trailing slash; for Auth0, `https://<tenant domain>/`. Empty leaves the dashboard off. When set, the secrets `gateway-mock-dashboard-client-id` and `gateway-mock-dashboard-client-secret` must exist in the vault first. Not a secret.')
+param gatewayMockDashboardAuthority string = ''
+
 @description('GitHub OIDC subject prefix of the repository whose workflows deploy the Function\'s code (#5), exactly as GitHub reports it: `gh api repos/OWNER/REPO/actions/oidc/customization/sub --jq .sub_claim_prefix`. Repositories created after 15 July 2026 use the immutable form `repo:OWNER@OWNER-ID/REPO@REPO-ID`, older ones `repo:OWNER/REPO`.')
 @minLength(6)
 param githubOidcSubjectPrefix string
@@ -124,6 +127,10 @@ var telemetryConsumerGroupName = 'telemetry-function'
 // history. The client ID is not a credential, but it stays out of the repository like every ID.
 var gatewayAuthClientIdSecretName = 'gateway-auth-client-id'
 var gatewayAuthClientSecretSecretName = 'gateway-auth-client-secret'
+
+// The gateway mock dashboard's credentials at the identity provider (#47), written the same way.
+var gatewayMockDashboardClientIdSecretName = 'gateway-mock-dashboard-client-id'
+var gatewayMockDashboardClientSecretSecretName = 'gateway-mock-dashboard-client-secret'
 
 // The queue for messages whose forwarding failed (ADR-010); the storage module adds its poison
 // queue, '<name>-poison'. The name is fixed: the RetryForwarding trigger and the dead-letter writer
@@ -269,6 +276,10 @@ module gatewayMock 'modules/gateway-mock.bicep' = {
     tags: tags
     jwtIssuer: gatewayAuthIssuer
     jwtAudience: gatewayAuthAudience
+    dashboardAuthority: gatewayMockDashboardAuthority
+    keyVaultName: keyVault.outputs.name
+    dashboardClientIdSecretName: gatewayMockDashboardClientIdSecretName
+    dashboardClientSecretSecretName: gatewayMockDashboardClientSecretSecretName
   }
 }
 
