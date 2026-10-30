@@ -132,6 +132,9 @@ client names its key and CSR the same way.
 above, but opens no hub and registers nothing. The enrollment group for the issuing CA creates the
 identity when the device first connects to DPS
 ([Zero-touch provisioning (one-time)](../../infra/README.md#zero-touch-provisioning-one-time)).
+DPS registers the device by its certificate's thumbprint, not as `certificateAuthority`, which
+matters for renewal and revocation
+([Devices provisioned through DPS](../../infra/README.md#devices-provisioned-through-dps)).
 `--no-register` takes the place of `--hub`: one of the two is required, and both together are an
 error, so leaving out `--hub` can never skip a registration by accident.
 
@@ -228,15 +231,21 @@ bind each one to a key the vault generates for it, which is not how these keys a
   create` above, a control-plane operation.
 - **Revoke.** IoT Hub does not check certificate revocation lists
   ([Revoke a device certificate](https://learn.microsoft.com/azure/iot-hub/authenticate-authorize-x509#revoke-a-device-certificate)).
-  A compromised device is disabled in the identity registry:
+  A compromised device registered with `--hub` is disabled in the identity registry:
   `az iot hub device-identity update --hub-name <hub> --device-id <id> --status disabled`. A
-  compromised issuing CA is removed from IoT Hub, which stops every device it signed, and a new
-  one is created (ADR-009).
-- **Renew.** A device lives 10 years or more and its certificate two; renewal is
-  [#16](https://github.com/asnielsen789/IIoT-platform/issues/16) or
-  [#48](https://github.com/asnielsen789/IIoT-platform/issues/48).
-- **Provision through DPS.** Zero-touch provisioning is
-  [#48](https://github.com/asnielsen789/IIoT-platform/issues/48).
+  compromised issuing CA is removed from IoT Hub, which stops every device it registered, and a
+  new one is created (ADR-009). A device that provisioned through DPS is registered by its own
+  thumbprint instead, so it must be shut out in DPS as well as in the hub
+  ([Revoking a device](../../infra/README.md#revoking-a-device)).
+- **Renew by itself.** `issue` makes a new certificate for the same CN, from the device's CSR,
+  but getting the request from the device and the certificate back to it is
+  [#16](https://github.com/asnielsen789/IIoT-platform/issues/16). For a device registered with
+  `--hub`, the new certificate works at once, since the hub trusts the CA. A DPS device must
+  provision again with it, and `--hub` is refused for it because its identity is not
+  `certificateAuthority`; renew it with `--no-register`
+  ([Renewing a device certificate](../../infra/README.md#renewing-a-device-certificate)).
+- **Provision through DPS.** `--no-register` leaves that to the device: the test client's
+  [`provision`](../IIoT.TestClient/README.md#zero-touch-provisioning).
 - **Turn off shared access keys** for devices. That belongs to the security review,
   [#21](https://github.com/asnielsen789/IIoT-platform/issues/21).
 

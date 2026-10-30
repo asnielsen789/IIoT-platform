@@ -258,6 +258,12 @@ the infrastructure README; the ID scope is the deployment output `provisioningId
    the device, and `--fixture` picks the message. There is no `--hub` and no `--device-id`: DPS
    names the hub, and the certificate's CN is the device ID.
 
+Running `provision` again registers the device again. That is how a renewed certificate reaches
+the hub, and how a device moves to another hub; the operator procedures are
+[Devices provisioned through DPS](../../infra/README.md#devices-provisioned-through-dps). The
+client never re-provisions by itself: a run with `--hub` that is refused stays refused, where
+device firmware would go back to DPS.
+
 What happens on the wire:
 
 - **One connection to DPS**, MQTT 3.1.1 over TLS on port 8883 to
@@ -410,10 +416,17 @@ instead:
     the zero-length password in the CONNECT;
   - the message takes the route and is processed;
   - a disabled device is refused with `NotAuthorized`.
+- **Through DPS** ([#48](https://github.com/asnielsen789/IIoT-platform/issues/48),
+  2026-10-30, `tank-000003`):
+  - DPS accepts the device certificate, sent without the issuing CA, through the enrollment
+    group, and the CONNECT without a password field;
+  - it answers `202` and then, after one poll, assigns the device to the hub, with the CN as
+    device ID;
+  - the device connects there with the same certificate, and its message is processed;
+  - a renewed certificate is refused by the hub until the device provisions with it, and accepted
+    after that. DPS registers the device by its certificate's thumbprint
+    ([Devices provisioned through DPS](../../infra/README.md#devices-provisioned-through-dps)).
 - **Not yet verified:**
-  - `provision` against DPS: that DPS accepts the certificate through the enrollment group,
-    assigns the device and registers it in the hub, and that the device then connects
-    ([#48](https://github.com/asnielsen789/IIoT-platform/issues/48));
   - keep-alive and reconnection behaviour;
   - throughput and throttling with a concurrent fleet, which is the scale test
     ([#20](https://github.com/asnielsen789/IIoT-platform/issues/20)).

@@ -38,8 +38,11 @@ Shows the internal components of the Azure platform.
 ```mermaid
 graph TB
     sensor["NB-IoT Sensor"] -- "MQTT / TLS<br/>X.509 cert" --> iothub
+    sensor -. "first start:<br/>MQTT / TLS, X.509 cert" .-> dps
 
     subgraph azure ["Azure Tenant"]
+        dps["Device Provisioning Service<br/>---<br/>Enrollment group for the device CA,<br/>assigns devices to hubs"]
+
         iothub["Azure IoT Hub<br/>---<br/>Device management,<br/>MQTT broker,<br/>message routing"]
 
         keyvault["Azure Key Vault<br/>---<br/>Device CA keys and certificates,<br/>secrets, connection strings"]
@@ -55,6 +58,8 @@ graph TB
 
     iothub -- "Event trigger" --> function
     keyvault -. "issuing CA certificate<br/>(registered once by an operator)" .-> iothub
+    keyvault -. "issuing CA certificate<br/>(registered once by an operator)" .-> dps
+    dps -- "creates the device identity" --> iothub
     keyvault -- "secrets" --> function
     function --> apim
     function -- "telemetry" --> monitor
@@ -75,6 +80,7 @@ graph TB
 | Component | Responsibility | Modularity |
 |-----------|----------------|------------|
 | **IoT Hub** | Device registry, MQTT broker, message routing, C2D messages | Replaceable by another MQTT broker — no vendor lock-in in the application layer |
+| **Device Provisioning Service** | Zero-touch provisioning: authenticates a device's certificate against the enrollment group for the device CA, creates its identity in the hub it assigns, and tells the device that hub ([#48](https://github.com/asnielsen789/IIoT-platform/issues/48)) | Hubs can be linked and unlinked, an operator's own included, so devices move between hubs without being changed; devices can also be registered without it (`IIoT.DeviceCa issue --hub`) |
 | **Key Vault** | The device CA's signing keys, which never leave it, and its certificates ([ADR-009](adr/adr-009-device-pki.md)); secrets for the Function. Not a CA itself: `tools/IIoT.DeviceCa` builds the certificates and has Key Vault sign them | Plain keys and RFC 5280 certificates: the keys can move to an HSM, the issuing CA to another provider |
 | **Azure Function** | Core logic: receive → transform → forward. Adapter pattern downstream | Can be relocated to other infrastructure as a container or service |
 | **APIM** | Optional layer for throttling, versioning and logging of outbound calls | Can be removed without affecting the Function |
@@ -97,7 +103,11 @@ sequenceDiagram
 
     Note over S,IH: Device authentication (on connect)
     S->>IH: TLS handshake with X.509 device certificate
-    IH->>IH: Verify chain to the registered issuing CA, CN = device ID
+    alt Registered by the signing tool
+        IH->>IH: Verify chain to the registered issuing CA, CN = device ID
+    else Provisioned through DPS
+        IH->>IH: Match the certificate's thumbprint DPS registered
+    end
     IH-->>S: Handshake complete, CONNECT accepted
 
     Note over S,GW: Data transmission (every 4 hours)
@@ -152,6 +162,33 @@ sequenceDiagram
     end
     RF->>P: After the last attempt, or when re-validation rejects it
     Note over P: Kept without expiry, for an operator
+```
+
+## Sequence: zero-touch provisioning
+
+A device's first start when nobody has registered it
+([#48](https://github.com/asnielsen789/IIoT-platform/issues/48)). The device knows the global
+endpoint, the ID scope and its certificate, and DPS tells it the hub. DPS registers the device by
+its certificate's thumbprint, so a renewed certificate, or a move to another hub, is another
+registration ([Devices provisioned through DPS](../infra/README.md#devices-provisioned-through-dps)).
+
+```mermaid
+sequenceDiagram
+    participant S as NB-IoT Sensor
+    participant DPS as Device Provisioning Service
+    participant IH as Azure IoT Hub
+
+    S->>DPS: TLS handshake with X.509 device certificate, CONNECT (registration ID = CN)
+    DPS->>DPS: Verify chain to the enrollment group's issuing CA
+    S->>DPS: SUBSCRIBE to the response topics
+    S->>DPS: PUBLISH register {"registrationId": CN}
+    DPS-->>S: 202 assigning, operationId, retry-after
+    DPS->>IH: Create device identity (device ID = CN, certificate thumbprint)
+    loop Until assigned, as often as retry-after says
+        S->>DPS: PUBLISH operation status (operationId)
+        DPS-->>S: 202 assigning, or 200 assigned (hub, device ID)
+    end
+    S->>IH: TLS handshake with the same certificate, then telemetry as above
 ```
 
 ## Sequence: cloud-to-device configuration
@@ -229,3 +266,9 @@ Components are designed so that an operator can take over parts of the platform:
     └── IoT Hub remains in the platform tenant
         (or is migrated separately)
 ```
+
+Devices that provisioned through DPS can be handed to an operator's own hub without being changed:
+the operator's hub is linked to the platform's DPS, the enrollment is pointed at it, and each
+device moves the next time it registers
+([Moving devices to another hub](../infra/README.md#moving-devices-to-another-hub); not tested
+yet).
