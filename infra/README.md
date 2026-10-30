@@ -570,6 +570,17 @@ An entry the retries give up on, or one a retry refuses for good, ends in
 the commands below, whether to put an entry back for another round or to delete it. Entries do
 not expire, so nothing is lost by waiting.
 
+Verified on staging on 2026-10-27 and 2026-10-30
+([#19](https://github.com/asnielsen789/IIoT-platform/issues/19)), with the gateway mock stopped and
+a shortened schedule (1 minute, 3 attempts):
+- **Dead-lettering:** a failed forward was dead-lettered, never to expire.
+- **Retries:** the queue retried it on schedule, and a failed retry went back to the queue rather
+  than being dead-lettered again.
+- **Poison:** after the last attempt the entry was moved to `forwarding-failed-poison`, again
+  never to expire.
+- **Replay:** with the commands below, the replayed entry was delivered on its first attempt. The
+  gateway recorded the original receipt time.
+
 Run from the repository root in Git Bash, in the shell where `RG` and `output` are set (step 3 of
 [Deploy](#deploy)).
 
@@ -663,9 +674,15 @@ replay after a gateway outage needs the gateway to be up.
 # Take the first entry: invisible to everyone else for five minutes, long enough for the rest
 read -r ID RECEIPT CONTENT < <(az storage message get --queue-name forwarding-failed-poison \
   --account-name "$STORAGE" --auth-mode login --visibility-timeout 300 \
-  --query "[0].[id, popReceipt, content]" -o tsv | tr -d '\r')
+  --query "[0:1].[id, popReceipt, content]" -o tsv | tr -d '\r')
 printf '%s' "$CONTENT" | base64 -d | head -c 300; echo
 ```
+
+The query is `[0:1].[…]`, a list holding one row, so the CLI's tab-separated output prints the three
+values on one line for `read`. With `[0].[…]`, a flat list, it prints one value per line, and only
+`ID` is set. The `get` still takes the entry, which then stays invisible for the five minutes. That
+happened on the first run. `head -c` cuts the base64 off mid-way, so `base64` may report "invalid
+input" after the decoded text; the content itself is intact.
 
 To replay it, assign Message Sender on `forwarding-failed`, put the content back exactly as it
 came, still base64, without expiry, then delete it from the poison queue and remove the role:
@@ -1541,7 +1558,14 @@ memory. An operator with a real downstream system drops the module and points
   the mock deploys as plain `dotnet publish` output. F1 has no Always On: the app unloads when
   idle, and the first request afterwards waits for it to start. The Function's retries cover that.
   It also has a daily CPU quota of 60 minutes, far more than a mock receiving a message every few
-  hours uses.
+  hours uses. Repeated stops, starts and cold starts can use it up all the same. On 2026-10-27,
+  during the dead-letter live test, the app went to `QuotaExceeded` and answered `403` from about
+  08:20 UTC until the daily reset at 00:00 UTC. The usage API reports no limits for a Linux free
+  plan, and the logs cannot be downloaded while the app is stopped, so what used the quota could
+  not be seen. To the Function such an outage is an ordinary forwarding failure: dead-lettering
+  covers about four hours, and an entry that runs out of attempts waits in the poison queue for a
+  replay ([Dead-lettered messages](#dead-lettered-messages)). Check the state with
+  `az webapp show --query "{state:state, usage:usageState}"`.
 - **Sweden Central, not North Europe.** On 2026-10-26 this subscription's App Service quota for
   F1 was 0 in North Europe, Germany West Central and UK South, and the deployment's preflight
   failed with `SubscriptionIsOverQuotaForSku`; Sweden Central and France Central had quota. The
