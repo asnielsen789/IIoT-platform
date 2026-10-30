@@ -143,3 +143,54 @@ and the run settled three details:
 
 The hardware risk is unchanged: this was a simulated device, not an NB-IoT modem
 ([#22](https://github.com/asnielsen789/IIoT-platform/issues/22)).
+
+## Update (2026-10-30): zero-touch provisioning through DPS
+
+The second stage of the registration decision is in place
+([#48](https://github.com/asnielsen789/IIoT-platform/issues/48)): a Device Provisioning Service
+linked to the hub, an enrollment group for the issuing CA, `IIoT.DeviceCa issue --no-register`,
+and the test client's `provision` command. On staging, a new device provisioned itself with a
+certificate the CA issued. DPS created its identity in the hub, and its message took the route
+and was processed. The decision stands. One fact found on the way changes three of its
+consequences for devices that provision through DPS.
+
+- **The device certificate alone is enough at DPS too.** The enrollment group is for the issuing
+  CA, the device certificate's direct issuer, so the leaf is a complete chain. The group for the
+  root that the previous update warned about was avoided.
+- **DPS registers each device by its own certificate, not as CA-signed.** The hub identity it
+  creates has authentication type `selfSigned`, with the SHA-256 thumbprint of the certificate
+  the device provisioned with. Microsoft documents this: DPS creates the identity "using the
+  device's leaf certificate as the credential"
+  ([Roll X.509 certificates in DPS](https://learn.microsoft.com/azure/iot-dps/how-to-roll-certificates)).
+  The fleet's single trust anchor therefore moves from the hub to DPS's enrollment group. The hub
+  holds one thumbprint per DPS device, which is still no secret.
+
+What that changes:
+
+- **Renewal now has a path at the hub's side.** It was "not solved here". A new certificate for
+  the same CN is refused by the hub until the device provisions again with it. DPS then updates
+  the existing identity in place, and the hub refuses the old certificate. Both were run on
+  staging. Getting the new certificate onto the device is still
+  [#16](https://github.com/asnielsen789/IIoT-platform/issues/16), and device firmware has to go
+  back to DPS on an authorisation error.
+- **The old certificate keeps provisioning.** The enrollment group accepts every certificate the
+  issuing CA signed for that CN until it expires, and on staging the old one put its thumbprint
+  back. This is harmless for routine renewal. After a suspected key compromise, the old
+  certificate has to be shut out in DPS with an individual enrollment for the device, since DPS
+  checks those before groups.
+- **Revocation is no longer only "disabling the device in IoT Hub".** A DPS device is
+  deprovisioned in both places: a disabled individual enrollment in DPS, kept for good, and a
+  disabled or deleted identity in the hub
+  ([Deprovision devices that were provisioned with DPS](https://learn.microsoft.com/azure/iot-dps/how-to-unprovision-devices)).
+  For a compromised issuing CA, removing it from the hub no longer stops every device it signed.
+  The DPS devices' identities do not depend on it. The enrollment group is disabled and each
+  device it provisioned is disabled, and then the CA is removed. Documented, not yet tested.
+
+Moving devices to another hub, including an operator's own, needs no change on the devices while
+they stay with this DPS instance. The target hub is linked to DPS and the enrollment is pointed
+at it. Each device moves the next time it registers, and its old identity is removed. This is not
+tested, since it needs a second hub, and one free hub is allowed per subscription.
+
+The procedures are in `infra/README.md`, "Devices provisioned through DPS". The hardware risk is
+unchanged ([#22](https://github.com/asnielsen789/IIoT-platform/issues/22)). The re-registration
+behaviour described there is a requirement on real firmware too.

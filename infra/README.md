@@ -1289,7 +1289,8 @@ It worked when the group is `enabled`, with attestation `x509` and CA `device-ca
   the group.
 - **Re-provisioning** is at its defaults: `updateHubAssignment: true` and `migrateDeviceData: true`.
   A device that provisions again may be moved to another hub, and its twin goes with it. That is
-  the mechanism for moving devices between hubs (step 7 of #48).
+  the mechanism for moving devices between hubs
+  ([Moving devices to another hub](#moving-devices-to-another-hub)).
 
 A device then provisions itself: the test client's `provision` command does what device firmware
 would ([Zero-touch provisioning](../tools/IIoT.TestClient/README.md#zero-touch-provisioning)).
@@ -1300,6 +1301,174 @@ The certificate registration and the enrollment group belong to the DPS instance
 deletes both, and steps 2 and 3 are repeated. Assign the role again too (step 1): a new instance
 is a new scope. A device that provisioned before keeps its identity in the hub until the hub
 itself is recreated.
+
+## Devices provisioned through DPS
+
+How a device that provisioned itself is renewed, revoked and moved to another hub
+([#48](https://github.com/asnielsen789/IIoT-platform/issues/48)). The first device was
+`tank-000003`, on 2026-10-30. Each part below says whether it was run on staging.
+
+```sh
+DPS=$(output provisioningServiceName)
+ID_SCOPE=$(output provisioningIdScope)
+DEVICE=tank-000003
+```
+
+### How DPS registers a device
+
+**By its own certificate, not by the CA.** DPS creates the hub identity "using the device's leaf
+certificate as the credential"
+([Roll X.509 certificates in DPS](https://learn.microsoft.com/azure/iot-dps/how-to-roll-certificates)).
+In the identity registry that is authentication type `selfSigned`, and both the primary and the
+secondary thumbprint are the SHA-256 thumbprint of the certificate the device provisioned with.
+The `Connections` log records `x509Certificate`, issuer `external`. A device that
+`IIoT.DeviceCa issue --hub` registered is `certificateAuthority` instead, logged as `CA-Signed`.
+
+```sh
+az iot hub device-identity show --hub-name "$IOT_HUB" --device-id "$DEVICE" \
+  --query "{auth:authentication.type, thumbprint:authentication.x509Thumbprint.primaryThumbprint, status:status}" -o table
+```
+
+So the hub knows exactly one certificate per DPS device, and the issuing CA registered in the hub
+plays no part in authenticating those devices. As at the hub, the device sends its certificate
+without the issuing CA, and DPS accepted it against the enrollment group for that CA. Run on
+staging on 2026-10-30.
+
+### Renewing a device certificate
+
+A device certificate is valid for two years and a device lives ten or more. Run on staging on
+2026-10-30, with a second certificate for `tank-000003` issued from its original CSR:
+
+1. **Issue the new certificate for the same CN**, with `--no-register`. `--hub` is refused for a
+   DPS device, because `issue` never changes an identity that is not `certificateAuthority`.
+   Microsoft says to keep the CN, so that provisioning again does not create a second
+   registration record. The same CSR keeps the device's key. A new CSR from the device gives it
+   a new key, and `create-csr` never overwrites one, so that takes a new file name.
+
+   ```sh
+   dotnet run --project tools/IIoT.DeviceCa -- issue --vault "$KEY_VAULT" --no-register \
+     --csr ~/.secrets/iiot/"$DEVICE".csr.pem --device-id "$DEVICE" --out ~/.secrets/iiot/renewed
+   ```
+
+2. **The hub refuses the new certificate** until the device has provisioned with it: the hub
+   still holds the old thumbprint, and the connection fails with `NotAuthorized`.
+3. **The device provisions again.** DPS updates the existing identity in place, with the same
+   `generationId` and the new thumbprint, and the device connects:
+
+   ```sh
+   dotnet run --project tools/IIoT.TestClient -- provision --id-scope "$ID_SCOPE" \
+     --cert ~/.secrets/iiot/renewed/"$DEVICE".chain.pem --key ~/.secrets/iiot/"$DEVICE".key.pem
+   ```
+
+   From then on the hub refuses the old certificate.
+
+**The old certificate still provisions.** On staging, provisioning again with the old certificate
+was accepted and put its thumbprint back in the hub. The enrollment group accepts every
+certificate the issuing CA signed for that CN until it expires. That is harmless when a
+certificate is renewed because it expires. It is not harmless when it is renewed because its key
+may be compromised: then the old certificate must also be shut out in DPS, as below.
+
+### Revoking a device
+
+IoT Hub checks no revocation list, and neither does DPS. Microsoft's procedure acts in both
+places, because each one alone leaves a way in
+([Deprovision devices that were provisioned with DPS](https://learn.microsoft.com/azure/iot-dps/how-to-unprovision-devices)):
+
+1. **In DPS, an individual enrollment for the device, disabled.** DPS "first looks for an
+   individual enrollment with the matching registration ID. Only if no individual enrollment is
+   found for the device, then the service searches enrollment groups"
+   ([Disenroll or revoke a device](https://learn.microsoft.com/azure/iot-dps/how-to-revoke-device-access-portal#disallow-specific-devices-from-an-x509-enrollment-group)).
+   A disabled one therefore blocks the device whichever certificate it presents, and the group
+   still serves every other device. Never delete it: without it, the device can provision
+   through the group again.
+
+   ```sh
+   az iot dps enrollment create --dps-name "$DPS" --resource-group "$RG" --auth-type login \
+     --enrollment-id "$DEVICE" --attestation-type x509 \
+     --certificate-path ~/.secrets/iiot/renewed/"$DEVICE".cert.pem --provisioning-status disabled -o none
+   ```
+
+   To shut out only an old certificate, after a renewal for a compromised key, make the same
+   enrollment `enabled` with the new certificate. DPS then attests the device against that one
+   certificate, not against the group.
+2. **In the hub, disable the identity** (or delete it). Disabling an individual enrollment
+   "doesn't remove an existing device registration from IoT Hub", and the device keeps
+   connecting with the certificate the hub holds.
+
+   ```sh
+   az iot hub device-identity update --hub-name "$IOT_HUB" --device-id "$DEVICE" --status disabled -o none
+   ```
+
+**Not run on staging yet.** The disabled hub identity was confirmed for a CA-signed device in
+[#11](https://github.com/asnielsen789/IIoT-platform/issues/11). The individual enrollment, and
+whether provisioning again changes a disabled identity's status, are not tested.
+
+**A compromised issuing CA** is no longer handled by removing it from the hub alone (ADR-009).
+That stops the devices `issue --hub` registered, but not DPS devices, whose identities hold
+their own thumbprints. Microsoft's deprovisioning procedure for a group:
+
+1. Disable the enrollment group.
+2. Disable or delete each device it provisioned, using the group's registration records
+   (`az iot dps enrollment-group registration list --dps-name "$DPS" --resource-group "$RG" --auth-type login --enrollment-id device-ca-issuing`).
+
+Then remove the CA certificate itself, from DPS and from the hub. For a breach, Microsoft says
+to delete the compromised CA certificate immediately (Roll X.509 certificates in DPS). This
+follows from the registration type. It is not tested.
+
+### Moving devices to another hub
+
+Moving devices needs no change on the devices as long as they stay with this DPS instance: the
+ID scope and the certificate stay the same, and DPS tells each device its new hub. **Not run on
+staging.** A subscription gets one free hub, so a second hub would be paid.
+
+1. **Link the target hub to DPS.** For an operator's own hub, in another subscription or tenant,
+   the operator creates a shared access policy with `RegistryWrite` and `ServiceConnect` (the
+   rights `dps-link` has), and DPS is linked with its connection string. The key is then held
+   by DPS, as `dps-link`'s is ([Device Provisioning Service](#device-provisioning-service)).
+
+   ```sh
+   az iot dps linked-hub create --dps-name "$DPS" --resource-group "$RG" --connection-string "<target hub policy connection string>"
+   ```
+
+2. **Point the enrollment at the target.** For the fleet, the group:
+
+   ```sh
+   az iot dps enrollment-group update --dps-name "$DPS" --resource-group "$RG" --auth-type login \
+     --enrollment-id device-ca-issuing --iot-hubs "<target hub>.azure-devices.net" --allocation-policy static
+   ```
+
+   For one device, an enabled individual enrollment for it, as above, with the same
+   `--iot-hubs` and `--allocation-policy static`.
+3. **The devices provision again.** DPS assigns no device by itself; each one moves the next
+   time it registers. The group's reprovisioning policy is at its default, `reprovisionandmigratedata`:
+   "the device registration with the initial IoT hub is removed", and the device's twin moves
+   with it
+   ([Device lifecycle and reprovisioning](https://learn.microsoft.com/azure/iot-dps/concepts-device-reprovision)).
+   What makes a device register again is its firmware's behaviour, below. A large fleet should
+   be moved in phases, within DPS's registration quotas.
+
+- **The target hub needs no CA registration** for DPS devices, which authenticate by thumbprint.
+  It does need one for devices registered by `issue --hub`, which DPS does not move.
+- **Moving to the operator's own DPS** instead does touch the devices: a new instance has a new
+  ID scope, and each device must be told it. That is configuration through IoT Hub
+  ([#16](https://github.com/asnielsen789/IIoT-platform/issues/16)), or a firmware update.
+
+### What the device has to do
+
+Renewal and moving both depend on the device registering again at the right moment. Microsoft's
+guidance for device firmware
+([Device lifecycle and reprovisioning](https://learn.microsoft.com/azure/iot-dps/concepts-device-reprovision#reprovision-policies)):
+
+- **Not on every start.** Keep the assigned hub and connect to it directly. A fleet that
+  provisions on every reboot can exceed DPS's quotas when it restarts at once.
+- **On a hub error, by kind.** Retry a `429` after its `Retry-After`. Retry a 5xx with
+  exponential back-off, the first retry after at least 5 seconds. On any other error, such as
+  `NotAuthorized` after a renewal, a disabled identity or a move, register through DPS again.
+- **On request.** Support a command that makes the device provision again, which here means C2D
+  ([#16](https://github.com/asnielsen789/IIoT-platform/issues/16)).
+
+The test client does not do this by itself. `provision` always registers, and a run with `--hub`
+never falls back to DPS. It is a test tool, and the operator decides when a device provisions.
 
 ## Naming
 
@@ -1657,6 +1826,9 @@ device's identity in the hub it assigns, and tells the device which hub that is.
   device endpoint, `<hub>.device.azure-devices.net`, which is in preview.
 - **Allocation:** `Hashed`, DPS's default. With one linked hub it decides nothing; with more,
   a device lands in the same hub again when it provisions again.
+- **Devices are registered by thumbprint.** DPS gives each device a hub identity holding its
+  own certificate's thumbprint, not a CA-signed one. That changes how certificates are renewed
+  and revoked: see [Devices provisioned through DPS](#devices-provisioned-through-dps).
 
 ## What the first deployment confirmed
 
