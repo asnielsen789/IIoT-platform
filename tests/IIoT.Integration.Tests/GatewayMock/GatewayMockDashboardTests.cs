@@ -139,6 +139,62 @@ public class GatewayMockDashboardTests : IClassFixture<DashboardFixture>
             var message = await GetPageAsync(browser, DashboardLinks.Message(DeviceId, messageId));
             Assert.Contains("<dd>v2</dd>", message, StringComparison.Ordinal);
             Assert.Contains("&quot;sensor&quot;", message, StringComparison.Ordinal);
+
+            // What each series shows (#87): under its chart, and as the tooltip of its tile and chip.
+            Assert.Contains(DashboardKinds.Describe(new("level", "shampoo")), device, StringComparison.Ordinal);
+            Assert.Contains(DashboardKinds.Describe(new("volume", "water")), device, StringComparison.Ordinal);
+            Assert.Contains($"title=\"{DashboardKinds.Describe(new("count", "cycles"))}\"", device, StringComparison.Ordinal);
+            Assert.Contains($"Count · cycles: {DashboardKinds.Describe(new("count", "cycles"))}", overview, StringComparison.Ordinal);
+        }
+    }
+
+    /// <summary>
+    /// A column's header sorts the table (#87): the order is in the address, so the page's own
+    /// refresh keeps it, and the active header says so and links to the reverse order. A sort the
+    /// mock does not know is the default order, never an error. On a device's page, the way into a
+    /// message and back out keeps the history's order.
+    /// </summary>
+    [Fact]
+    public async Task Dashboard_SortedByAColumn_KeepsTheOrderInTheAddress()
+    {
+        string[] devices = ["sort-dashboard-a", "sort-dashboard-b", "sort-dashboard-c"];
+        var messageIds = new List<string>();
+        foreach (var deviceId in devices)
+        {
+            var messageId = GatewayRequests.NewMessageId();
+            messageIds.Add(messageId);
+            await DeliverAsync(GatewayRequests.ValidBatch(deviceId, messageId), messageId);
+        }
+
+        var (browser, _) = await _dashboard.SignInAsync();
+        using (browser)
+        {
+            var descending = await GetPageAsync(browser, "/dashboard?sort=device&dir=desc");
+            Assert.True(
+                descending.IndexOf(devices[2], StringComparison.Ordinal) < descending.IndexOf(devices[1], StringComparison.Ordinal) &&
+                descending.IndexOf(devices[1], StringComparison.Ordinal) < descending.IndexOf(devices[0], StringComparison.Ordinal),
+                "the devices should be Z to A");
+            Assert.Contains("<th aria-sort=\"descending\"><a class=\"sort active\" href=\"/dashboard?sort=device&amp;dir=asc\">", descending, StringComparison.Ordinal);
+            Assert.Single(System.Text.RegularExpressions.Regex.Matches(descending, "aria-sort="));
+            Assert.Contains("href=\"/dashboard?sort=measured&amp;dir=desc\"", descending, StringComparison.Ordinal);
+            Assert.Contains("http-equiv=\"refresh\"", descending, StringComparison.Ordinal);
+
+            var unknown = await GetPageAsync(browser, "/dashboard?sort=%3Cscript%3E&dir=%22%3E");
+            Assert.DoesNotContain("<script", unknown, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("<th aria-sort=\"ascending\"><a class=\"sort active\" href=\"/dashboard?sort=device&amp;dir=desc\">", unknown, StringComparison.Ordinal);
+            Assert.True(
+                unknown.IndexOf(devices[0], StringComparison.Ordinal) < unknown.IndexOf(devices[2], StringComparison.Ordinal),
+                "an unknown sort should be the default, A to Z");
+
+            var sort = new TableSort("quality", true);
+            var history = await GetPageAsync(browser, DashboardLinks.Device(devices[0], sort));
+            var intoMessage = DashboardLinks.Message(devices[0], messageIds[0], sort);
+            Assert.Contains($"href=\"{intoMessage.Replace("&", "&amp;", StringComparison.Ordinal)}\"", history, StringComparison.Ordinal);
+            Assert.Contains("<th aria-sort=\"descending\" title=\"The worst quality among the message&#x27;s readings\">", history, StringComparison.Ordinal);
+
+            var message = await GetPageAsync(browser, intoMessage);
+            var outOfMessage = DashboardLinks.Device(devices[0], sort).Replace("&", "&amp;", StringComparison.Ordinal);
+            Assert.Equal(2, System.Text.RegularExpressions.Regex.Count(message, System.Text.RegularExpressions.Regex.Escape($"href=\"{outOfMessage}\"")));
         }
     }
 

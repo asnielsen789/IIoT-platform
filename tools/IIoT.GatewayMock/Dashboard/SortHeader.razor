@@ -1,0 +1,40 @@
+@*
+    A column header that sorts its table (#87): a link to the same page in the order it names. The
+    table's current column says so to assistive technology with aria-sort, and to the eye with an
+    arrow: down for descending, up for ascending. The other columns show a faint double arrow, so a
+    reader can see they sort too.
+*@
+<th aria-sort="@AriaSort" title="@Title">
+    <a class="sort@(Active ? " active" : "")" href="@Href(Sorts.Next(Sort, Key))">@Label<span class="arrow" aria-hidden="true">@Arrow</span></a>
+</th>
+
+@code {
+    /// <summary>The column, as the query string names it.</summary>
+    [Parameter, EditorRequired]
+    public string Key { get; set; } = default!;
+
+    [Parameter, EditorRequired]
+    public string Label { get; set; } = default!;
+
+    /// <summary>The table's columns.</summary>
+    [Parameter, EditorRequired]
+    public ITableSorts Sorts { get; set; } = default!;
+
+    /// <summary>The table's current order.</summary>
+    [Parameter, EditorRequired]
+    public TableSort Sort { get; set; }
+
+    /// <summary>The page's address in another order.</summary>
+    [Parameter, EditorRequired]
+    public Func<TableSort, string> Href { get; set; } = default!;
+
+    /// <summary>What the column sorts by, where its label alone does not say.</summary>
+    [Parameter]
+    public string? Title { get; set; }
+
+    private bool Active => Sort.Key == Key;
+
+    private string? AriaSort => Active ? Sort.Descending ? "descending" : "ascending" : null;
+
+    private string Arrow => Active ? Sort.Descending ? "↓" : "↑" : "↕";
+}

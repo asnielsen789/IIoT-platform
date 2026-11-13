@@ -228,16 +228,143 @@ public class DashboardSnapshotTests
         Assert.Null(reading.MeasuredAt);
     }
 
-    /// <summary>Stores a valid batch whose readings are the given value and measurement time pairs.</summary>
-    private static void Add(ReadingStore store, string deviceId, string messageId, params (string Value, string At)[] readings)
+    /// <summary>
+    /// A device without a value for the column comes last whichever way the table is sorted: an
+    /// unknown firmware is not the oldest or the newest. Versions sort as numbers.
+    /// </summary>
+    [Fact]
+    public void Devices_SortedByAColumn_PutThoseWithoutAValueLast_EitherWay()
     {
-        var body = JsonNode.Parse(GatewayRequests.ValidBatch(deviceId, messageId))!.AsObject();
+        var store = new ReadingStore();
+        Add(store, "tank-000001", "a", [("1", "2026-09-14T06:00:00Z")], firmware: "2.10.0");
+        Add(store, "tank-000002", "b", [("1", "2026-09-14T06:00:00Z")], firmware: null);
+        Add(store, "tank-000003", "c", [("1", "2026-09-14T06:00:00Z")], firmware: "2.9.1");
+
+        Assert.Equal(
+            ["tank-000003", "tank-000001", "tank-000002"],
+            DashboardSnapshot.Create(store.Batches, Now, new("firmware", false)).Devices.Select(device => device.DeviceId));
+        Assert.Equal(
+            ["tank-000001", "tank-000003", "tank-000002"],
+            DashboardSnapshot.Create(store.Batches, Now, new("firmware", true)).Devices.Select(device => device.DeviceId));
+    }
+
+    /// <summary>
+    /// Devices the column cannot tell apart keep the default order, A to Z by ID, in either
+    /// direction, so the table does not reshuffle on a refresh.
+    /// </summary>
+    [Fact]
+    public void Devices_EqualInTheColumn_KeepTheDefaultOrder()
+    {
+        var store = new ReadingStore();
+        Add(store, "tank-000003", "a", ("1", "2026-09-14T06:00:00Z"));
+        Add(store, "tank-000001", "b", ("1", "2026-09-14T06:00:00Z"));
+        Add(store, "tank-000002", "c", ("1", "2026-09-14T09:00:00Z"));
+
+        var newestFirst = DashboardSnapshot.Create(store.Batches, Now, new("measured", true));
+        var oldestFirst = DashboardSnapshot.Create(store.Batches, Now, new("measured", false));
+
+        Assert.Equal(new TableSort("measured", true), newestFirst.Sort);
+        Assert.Equal(["tank-000002", "tank-000001", "tank-000003"], newestFirst.Devices.Select(device => device.DeviceId));
+        Assert.Equal(["tank-000001", "tank-000003", "tank-000002"], oldestFirst.Devices.Select(device => device.DeviceId));
+        Assert.Equal(DashboardSorts.Devices.Default, DashboardSnapshot.Create(store.Batches, Now).Sort);
+    }
+
+    /// <summary>
+    /// "Latest" compares devices within the kind of their first series: every level before every
+    /// energy reading, and by value within it, since 400 mm and 400 kWh are not comparable.
+    /// </summary>
+    [Fact]
+    public void Devices_ByLatest_CompareWithinAKind()
+    {
+        var store = new ReadingStore();
+        Add(store, "tank-000001", "a", ("900", "2026-09-14T06:00:00Z"));
+        Add(store, "tank-000002", "b", ("400", "2026-09-14T06:00:00Z"));
+        using (var charger = JsonDocument.Parse(ContractFixtures.ReadGatewayV2("valid-ev-charger.json")))
+        {
+            store.TryAdd("charger-000001", "c", charger.RootElement, caller: null, Now);
+        }
+
+        Assert.Equal(
+            ["tank-000002", "tank-000001", "charger-000001"],
+            DashboardSnapshot.Create(store.Batches, Now, new("latest", false)).Devices.Select(device => device.DeviceId));
+    }
+
+    /// <summary>
+    /// The history is sorted within the newest messages it shows: worst quality first, and messages
+    /// of the same quality newest first. Sorting never brings an older message into it.
+    /// </summary>
+    [Fact]
+    public void History_SortedByQuality_IsWorstFirst_WithinTheNewest()
+    {
+        var store = new ReadingStore();
+        Add(store, "tank-000001", "old-bad", [("1", "2026-09-14T06:00:00Z")], quality: "bad");
+        for (var i = 0; i < DeviceSnapshot.MaxBatchesShown - 3; i++)
+        {
+            Add(store, "tank-000001", $"ok-{i:D3}", ("1", "2026-09-14T06:00:00Z"));
+        }
+
+        Add(store, "tank-000001", "uncertain", [("1", "2026-09-14T06:00:00Z")], quality: "uncertain");
+        Add(store, "tank-000001", "bad", [("1", "2026-09-14T06:00:00Z")], quality: "bad");
+        Add(store, "tank-000001", "newest-ok", ("1", "2026-09-14T06:00:00Z"));
+
+        var history = DeviceSnapshot.Create(store.Batches, "tank-000001", null, Now, new("quality", true))!.NewestBatches;
+
+        Assert.Equal(DeviceSnapshot.MaxBatchesShown, history.Count);
+        Assert.Equal(["bad", "uncertain", "newest-ok"], history.Take(3).Select(batch => batch.MessageId));
+        Assert.DoesNotContain(history, batch => batch.MessageId == "old-bad");
+    }
+
+    /// <summary>
+    /// The history's default order is when the platform received each message, newest first: a
+    /// message the mock stored late, such as one retried after a failed delivery, sits where the
+    /// platform received it.
+    /// </summary>
+    [Fact]
+    public void History_ByDefault_IsNewestReceivedFirst()
+    {
+        var store = new ReadingStore();
+        Add(store, "tank-000001", "received-second", [("1", "2026-09-14T08:00:00Z")], receivedAt: "2026-09-14T08:00:00Z");
+        Add(store, "tank-000001", "received-third", [("1", "2026-09-14T09:00:00Z")], receivedAt: "2026-09-14T09:00:00Z");
+        Add(store, "tank-000001", "retried", [("1", "2026-09-14T07:00:00Z")], receivedAt: "2026-09-14T07:00:00Z");
+
+        var snapshot = DeviceSnapshot.Create(store.Batches, "tank-000001", null, Now)!;
+
+        Assert.Equal(DashboardSorts.History.Default, snapshot.Sort);
+        Assert.Equal(["received-third", "received-second", "retried"], snapshot.NewestBatches.Select(batch => batch.MessageId));
+    }
+
+    /// <summary>Stores a valid batch whose readings are the given value and measurement time pairs.</summary>
+    private static void Add(ReadingStore store, string deviceId, string messageId, params (string Value, string At)[] readings) =>
+        Add(store, deviceId, messageId, readings, firmware: "");
+
+    /// <param name="firmware">The batch's firmware, <c>null</c> to leave it out, or empty for the example's own.</param>
+    /// <param name="quality">Every reading's quality, or <c>null</c> for the example's own.</param>
+    /// <param name="receivedAt">The batch's <c>receivedAt</c>, or <c>null</c> for the example's own.</param>
+    private static void Add(
+        ReadingStore store, string deviceId, string messageId, (string Value, string At)[] values,
+        string? firmware = "", string? quality = null, string? receivedAt = null)
+    {
+        var body = JsonNode.Parse(GatewayRequests.ValidBatch(deviceId, messageId, receivedAt))!.AsObject();
+        if (firmware is null)
+        {
+            body.Remove("firmware");
+        }
+        else if (firmware.Length > 0)
+        {
+            body["firmware"] = firmware;
+        }
+
         var template = body["readings"]![0]!;
-        body["readings"] = new JsonArray(readings.Select(reading =>
+        body["readings"] = new JsonArray(values.Select(reading =>
         {
             var node = template.DeepClone();
             node["value"] = JsonValue.Create(decimal.Parse(reading.Value, System.Globalization.CultureInfo.InvariantCulture));
             node["at"] = reading.At;
+            if (quality is not null)
+            {
+                node["quality"] = quality;
+            }
+
             return (JsonNode?)node;
         }).ToArray());
 
