@@ -325,6 +325,18 @@ dotnet run --project tools/IIoT.TestClient -- fleet --hub <hub>
   ```sh
   tools/provision-fleet.sh --vault <vault> --hub <hub> --id-scope <id scope>
   ```
+- **When DPS cannot provision**, for instance with `401002` while its link to the hub holds an
+  old key ([If the link update fails](../../infra/README.md#if-the-link-update-fails)), register
+  the devices directly instead, CA-signed, from the key and CSR `create-csr` wrote:
+
+  ```sh
+  dotnet run --project tools/IIoT.DeviceCa -- issue --vault <vault> --hub <hub> \
+    --csr ~/.secrets/iiot/<id>.csr.pem --device-id <id> --out ~/.secrets/iiot
+  ```
+
+  `fleet` sends the same way for both kinds of identity, and `provision-fleet.sh` leaves a
+  directly registered device alone afterwards. Seventeen devices of the reference fleet were
+  registered this way on staging on 2026-10-30.
 - **The same every run.** A device's simulation is seeded from its ID, so its values repeat for
   the same window; only the message IDs are new, so a history sent twice is two histories.
 - **Within the contract.** A message carries at most 12 samples, 60 measurements for a car wash,

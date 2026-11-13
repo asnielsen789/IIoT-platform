@@ -52,7 +52,10 @@ if [ -z "$VAULT" ] || [ -z "$HUB" ] || [ -z "$ID_SCOPE" ]; then
   usage
 fi
 
-dotnet build tools/IIoT.TestClient tools/IIoT.DeviceCa -c Release -v q --nologo >/dev/null
+# One project per `dotnet build`: it takes a single project or solution (MSB1008 otherwise).
+for project in tools/IIoT.TestClient tools/IIoT.DeviceCa; do
+  dotnet build "$project" -c Release -v q --nologo >/dev/null
+done
 CLIENT=(dotnet tools/IIoT.TestClient/bin/Release/net10.0/IIoT.TestClient.dll)
 CA=(dotnet tools/IIoT.DeviceCa/bin/Release/net10.0/IIoT.DeviceCa.dll)
 
