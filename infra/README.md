@@ -598,13 +598,15 @@ MSYS_NO_PATHCONV=1 az role assignment create --assignee-object-id "$ME" --assign
 
 # What is there, and when the mock stored each
 az storage blob list --account-name "$ARCHIVE" --container-name readings --auth-mode login \
-  --query "[].{name:name, stored:metadata.storedat}" -o table
+  --include m --num-results '*' --query "[].{name:name, stored:metadata.storedat}" -o table
 
 # All of it, as files
 az storage blob download-batch --account-name "$ARCHIVE" --source readings --destination ./mock-archive --auth-mode login
 ```
 
-A new role assignment can take a few minutes to apply; until then the commands answer
+The listing leaves out the metadata unless `--include m` asks for it, and `stored` is then
+empty. It stops at 5,000 blobs unless `--num-results '*'` asks for all of them. A new role
+assignment can take a few minutes to apply; until then the commands answer
 `AuthorizationPermissionMismatch`. Remove the role again when done, with `az role assignment
 delete` and the same arguments.
 
