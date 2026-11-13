@@ -107,9 +107,10 @@ Three views, in red and white
   by arrival, so a late backfill or a redelivered message never displaces a newer reading.
 - **A device** (`/dashboard/device?id=<device>`): the latest reading of each series, a chart per
   kind it measures (its newest 100 readings per series, by measurement time, a line per sensor,
-  each reading's quality as the ring around its dot), and its message history, newest first (the
-  newest 100): when the platform received each message, its `messageId` (which is also the
-  `Idempotency-Key`), its readings, its worst quality and its
+  each reading's quality as the ring around its dot) with what each series shows above it, and its
+  newest 100 messages, by default newest first by when the platform received them: when the
+  platform received each message, its `messageId` (which is also the `Idempotency-Key`), its
+  readings, its worst quality and its
   firmware. A replay is acknowledged but not stored again, so it never appears twice.
 - **A message** (`&message=<messageId>` added to the device's address): a modal over the device's
   page with the batch as the mock stored it, as indented, coloured JSON, and its metadata: when
@@ -124,6 +125,34 @@ meter's running total, so its slope is the rate of use. The type a device is sho
 charger, car wash, oil separator) is a guess from the series it sends, for presentation only: the
 contract has no device type, and readings are judged by kind. Units are shown as people write them
 (`kW.h` as kWh; a count's `1` not at all).
+
+**What each series shows**
+([#87](https://github.com/asnielsen789/IIoT-platform/issues/87)). Each series has a sentence or
+two describing it: as the tooltip of its value on the overview and its tile on the device's page,
+and as text above its chart, where a phone shows it too. It comes from the kind's meaning in the
+contract and, for a few well-known sensor names, the sensor's: `Level · oil` is the thickness of
+a separator's oil layer, `Count · cycles` the wash cycles run. Any other sensor is described by
+its kind alone, so the text never claims more than the contract says.
+
+**Sorting** ([#87](https://github.com/asnielsen789/IIoT-platform/issues/87)). Every column of the
+overview and of a device's history sorts its table: the header is a link to the same page with
+`&sort=<column>&dir=asc|desc` in its address, and the active column's header reverses it. The
+order is in the address, so the page's own refresh keeps it, and on a device's page, opening a
+message and closing it again keeps it too. On a narrow screen the headers become a row of
+"Sort by" links. A column starts with the newest, largest or worst first where that is what a
+reader looks for (times, counts, quality), and A to Z otherwise; versions and IDs sort as numbers
+where they are numbers, so firmware `2.10.0` comes after `2.9.1`.
+
+- **Rows without a value come last** in either direction: a device that reported no firmware is
+  not the oldest or the newest, only unknown.
+- **Rows the column cannot tell apart** keep the table's default order, so a refresh never
+  reshuffles them.
+- **"Latest"** compares devices within the kind of their first series, levels before energy
+  readings and so on, and by value within it: 400 mm and 400 kWh are not comparable.
+- **The history is sorted within its newest 100 messages**: sorting never brings an older
+  message into it.
+- **The query string is untrusted:** a `sort` that names no column is the default order, and a
+  `dir` other than `asc` or `desc` is the column's own direction.
 
 Device and message IDs are in the query string, escaped, because either may hold any character,
 `/` included. An address the mock no longer knows, from before a restart, is a 404 page with a
@@ -187,8 +216,8 @@ All of the dashboard's paths are under `/dashboard`:
 
 | Path | What it is |
 |------|------------|
-| `/dashboard` | The overview |
-| `/dashboard/device?id=…[&message=…]` | A device, and optionally one of its messages |
+| `/dashboard[?sort=…&dir=…]` | The overview, optionally sorted |
+| `/dashboard/device?id=…[&message=…][&sort=…&dir=…]` | A device, optionally one of its messages, and its history optionally sorted |
 | `/dashboard/sign-out` | Sign-out |
 | `/dashboard/signin-oidc` | Where the provider returns after sign-in: the **callback URL** to register |
 | `/dashboard/signout-callback-oidc` | Where the provider returns after sign-out: the **logout URL** to register |
@@ -349,8 +378,9 @@ socket is opened — and covers:
 - the dashboard, disabled: its paths are `404` with a valid token, and no other scheme exists;
 - the dashboard, enabled, against an in-process OpenID Connect provider that checks the client
   secret, the redirect URI and the PKCE verifier: the sign-in redirect carries a PKCE challenge;
-  a signed-in browser sees the stored batches, and a device of several series its series and a
-  chart per kind; markup in a device ID, message ID, firmware or user
+  a signed-in browser sees the stored batches, and a device of several series its series, a
+  chart per kind and what each series shows; a sorted table keeps its order in its links, and an
+  unknown sort is the default order; markup in a device ID, message ID, firmware or user
   name is rendered as text; the session cookie alone gets `401` from the API; a bearer token alone
   does not open the dashboard; a code injected into another sign-in issues no session; the
   cookie's attributes; sign-out at both ends, with an `id_token_hint` the provider issued;

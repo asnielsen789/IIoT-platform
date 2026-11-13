@@ -1,11 +1,13 @@
 @*
-    One device: the latest reading of each of its series, a chart per kind it measures, and its
-    message history, newest first (ADR-011). With a message chosen, the same page is rendered with
-    that message in a modal over it.
+    One device: the latest reading of each of its series, a chart per kind it measures with what
+    each series shows, and its message history, newest first unless a column's header sorts it
+    otherwise (ADR-011, #87). With a message chosen, the same page is rendered with that message in
+    a modal over it.
 
     The modal needs no script. It is the page at its own address (?id=…&message=…), drawn over the
     history; its close button and its backdrop are links back to the page without it. That
-    address does not reload itself, so an open message stays open.
+    address does not reload itself, so an open message stays open. Opening and closing a message
+    keeps the history's order: both links carry it.
 *@
 <DashboardShell Title="@Snapshot.Device.DeviceId" SignedInAs="@SignedInAs" SignOutPath="@SignOutPath"
                 TakenAt="@Snapshot.TakenAt" RefreshSeconds="@(Snapshot.Selected is null ? RefreshSeconds : null)">
@@ -20,7 +22,7 @@
         <section class="tiles" aria-label="Latest readings">
             @foreach (var series in Device.Series)
             {
-                <div class="tile">
+                <div class="tile" title="@DashboardKinds.Describe(series.Key)">
                     <span class="badge-icon"><Icon Name="@KindIcon(series.Key.Kind)" /></span>
                     <div>
                         <div class="label">@series.Key.Label</div>
@@ -53,6 +55,19 @@
                     <h2>@DashboardKinds.Label(trend.Kind)@(DashboardKinds.Unit(trend.Unit) is { Length: > 0 } unit ? $" ({unit})" : "")</h2>
                     <span class="note">Newest @DeviceSnapshot.MaxTrendReadings readings per series at most</span>
                 </header>
+                <div class="about">
+                    @if (trend.Lines.Count == 1 && trend.Lines[0].Sensor is null)
+                    {
+                        <p>@DashboardKinds.Describe(new SeriesKey(trend.Kind, null))</p>
+                    }
+                    else
+                    {
+                        @foreach (var line in trend.Lines)
+                        {
+                            <p><strong>@line.Sensor</strong> @DashboardKinds.Describe(new SeriesKey(trend.Kind, line.Sensor))</p>
+                        }
+                    }
+                </div>
                 <TrendChart Trend="@trend" />
             </section>
         }
@@ -62,19 +77,20 @@
                 <Icon Name="message" />
                 <h2>Message history</h2>
                 <span class="note">
-                    Newest first@(Device.MessageCount > Snapshot.NewestBatches.Count ? $"; the newest {Snapshot.NewestBatches.Count} of {Device.MessageCount}" : "").
-                    Open one to see what arrived.
+                    @(Device.MessageCount > Snapshot.NewestBatches.Count ? $"The newest {Snapshot.NewestBatches.Count} of {Device.MessageCount}. " : "")Open one to see what arrived.
                 </span>
             </header>
             <table class="stack">
                 <thead>
                     <tr>
-                        <th>Received</th>
-                        <th>Message ID</th>
-                        <th>Readings</th>
-                        <th>Quality</th>
-                        <th>Firmware</th>
-                        <th><span class="muted" aria-hidden="true"></span></th>
+                        <SortHeader Key="received" Label="Received" Sorts="@Sorts" Sort="@Snapshot.Sort" Href="@Href"
+                                    Title="When the platform received the message" />
+                        <SortHeader Key="message" Label="Message ID" Sorts="@Sorts" Sort="@Snapshot.Sort" Href="@Href" />
+                        <SortHeader Key="readings" Label="Readings" Sorts="@Sorts" Sort="@Snapshot.Sort" Href="@Href" />
+                        <SortHeader Key="quality" Label="Quality" Sorts="@Sorts" Sort="@Snapshot.Sort" Href="@Href"
+                                    Title="The worst quality among the message's readings" />
+                        <SortHeader Key="firmware" Label="Firmware" Sorts="@Sorts" Sort="@Snapshot.Sort" Href="@Href" />
+                        <th class="go"><span class="muted" aria-hidden="true"></span></th>
                     </tr>
                 </thead>
                 <tbody>
@@ -84,7 +100,7 @@
                             @* Two-part cells are wrapped in one .cell, so they stay together when the table stacks. *@
                             <td data-label="Received" title="@batch.ReceivedAt">
                                 <span class="cell">
-                                    <a class="row" href="@DashboardLinks.Message(batch.DeviceId, batch.MessageId)">@DashboardFormat.Instant(batch.ReceivedAt)</a>
+                                    <a class="row" href="@DashboardLinks.Message(batch.DeviceId, batch.MessageId, KeptSort)">@DashboardFormat.Instant(batch.ReceivedAt)</a>
                                     <span class="sub">stored @DashboardFormat.Ago(batch.StoredAt, Snapshot.TakenAt)</span>
                                 </span>
                             </td>
@@ -112,12 +128,12 @@
         @if (Snapshot.Selected is { } selected)
         {
             <div class="modal">
-                <a class="backdrop" href="@DashboardLinks.Device(Device.DeviceId)" aria-label="Close" tabindex="-1"></a>
+                <a class="backdrop" href="@DashboardLinks.Device(Device.DeviceId, KeptSort)" aria-label="Close" tabindex="-1"></a>
                 <section class="dialog" role="dialog" aria-modal="true" aria-labelledby="message-title">
                     <header>
                         <Icon Name="code" />
                         <h2 id="message-title">Message <span class="mono">@selected.Batch.MessageId</span></h2>
-                        <a class="close" href="@DashboardLinks.Device(Device.DeviceId)" aria-label="Close"><Icon Name="close" /></a>
+                        <a class="close" href="@DashboardLinks.Device(Device.DeviceId, KeptSort)" aria-label="Close"><Icon Name="close" /></a>
                     </header>
                     <div class="content">
                         <dl class="meta">
@@ -158,6 +174,13 @@
     public string SignOutPath { get; set; } = default!;
 
     private DeviceSummary Device => Snapshot.Device;
+
+    private static ITableSorts Sorts => DashboardSorts.History;
+
+    private string Href(TableSort sort) => DashboardLinks.Device(Device.DeviceId, sort);
+
+    /// <summary>The history's order for the links into and out of a message; none when it is the default.</summary>
+    private TableSort? KeptSort => Snapshot.Sort == DashboardSorts.History.Default ? null : Snapshot.Sort;
 
     /// <summary>
     /// What the batch holds, in a few words: for one series the lowest to the highest value (or its

@@ -55,6 +55,47 @@ internal static class DashboardKinds
 
     /// <summary>Whether the kind is a meter's running total rather than a reading of the moment.</summary>
     public static bool IsCumulative(string? kind) => kind is "energy" or "volume" or "count";
+
+    /// <summary>
+    /// What a series shows, in a sentence or two, for the pages' tooltips and the text under each
+    /// chart (#87).
+    /// </summary>
+    /// <remarks>
+    /// From the kind's meaning in the contract (ADR-011), and for a few sensor names whose meaning
+    /// is well known, the sensor's: <c>level · oil</c> is the thickness of a separator's oil layer,
+    /// not a tank's level. A sensor the dashboard does not know gets its kind's description, so the
+    /// text never claims more than the kind says. Like the device type, this is presentation: the
+    /// contract gives a sensor no meaning beyond telling a device's series apart.
+    /// </remarks>
+    public static string Describe(SeriesKey series) => (series.Kind, series.Sensor) switch
+    {
+        ("level", "oil") =>
+            "The thickness of the oil layer separated out on top of the water, in mm. It builds up until the separator is emptied.",
+        ("level", "sludge") =>
+            "The depth of the sludge settled at the bottom, in mm. It builds up until the separator is emptied.",
+        ("level", "shampoo" or "wax") =>
+            $"The level in the {series.Sensor} tank, in mm. It falls with every wash, and jumps when the tank is refilled.",
+        ("level", "reclaim") =>
+            "The level in the reclaim tank, which collects used wash water for reuse, in mm.",
+        ("level", _) =>
+            "A level: how high the contents stand, in mm.",
+        ("energy", _) =>
+            "The energy meter's reading: a running total in kWh. The rise between two readings is the energy used in between, and the slope is the power.",
+        ("power", _) =>
+            "The power at the moment of the reading, in kW.",
+        ("volume", "water") =>
+            "The water meter's reading: a running total in litres. The rise between two readings is the water used in between.",
+        ("volume", _) =>
+            "A volume meter's reading: a running total in litres. The rise between two readings is the volume metered in between.",
+        ("count", "sessions") =>
+            "Charging sessions started, as a running total. The rise between two readings is the sessions started in between.",
+        ("count", "cycles") =>
+            "Wash cycles run, as a running total. The rise between two readings is the washes in between.",
+        ("count", _) =>
+            "A counter: a running total of events. The rise between two readings is the events in between.",
+        _ =>
+            "A kind of reading the dashboard does not know; shown as received."
+    };
 }
 
 /// <summary>

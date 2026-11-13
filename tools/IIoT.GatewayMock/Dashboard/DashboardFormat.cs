@@ -67,17 +67,32 @@ internal static class DashboardFormat
 /// path segments.
 /// </summary>
 /// <remarks>
+/// <para>
 /// Both are untrusted and may hold any character within the contract's length limits, <c>/</c> and
 /// <c>%</c> included. ASP.NET Core leaves <c>%2F</c> undecoded in a path, so an ID in a path segment
 /// could not always be told apart from another; a query parameter decodes to exactly the ID.
+/// </para>
+/// <para>
+/// A table's order travels the same way (<c>&amp;sort=…&amp;dir=…</c>), on the links that should
+/// keep it: a column header, and on a device's page the way into a message and back out of it.
+/// Without a sort, a link leads to the table's default order.
+/// </para>
 /// </remarks>
 internal static class DashboardLinks
 {
     public const string Overview = DashboardEndpoints.Route;
 
-    public static string Device(string deviceId) =>
-        $"{DashboardEndpoints.DeviceRoute}?id={Uri.EscapeDataString(deviceId)}";
+    /// <summary>The overview, with its devices in <paramref name="sort"/>'s order.</summary>
+    public static string OverviewSorted(TableSort sort) => $"{Overview}?{Query(sort)}";
 
-    public static string Message(string deviceId, string messageId) =>
-        $"{Device(deviceId)}&message={Uri.EscapeDataString(messageId)}";
+    public static string Device(string deviceId, TableSort? sort = null) =>
+        $"{DashboardEndpoints.DeviceRoute}?id={Uri.EscapeDataString(deviceId)}{Then(sort)}";
+
+    public static string Message(string deviceId, string messageId, TableSort? sort = null) =>
+        $"{Device(deviceId)}&message={Uri.EscapeDataString(messageId)}{Then(sort)}";
+
+    private static string Then(TableSort? sort) => sort is { } order ? "&" + Query(order) : "";
+
+    private static string Query(TableSort sort) =>
+        $"sort={Uri.EscapeDataString(sort.Key)}&dir={sort.Direction}";
 }

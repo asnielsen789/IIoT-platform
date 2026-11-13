@@ -8,8 +8,8 @@ namespace IIoT.GatewayMock.Dashboard;
 /// <summary>
 /// The read-only dashboard of what the mock has received: <c>GET /dashboard</c>, the overview;
 /// <c>GET /dashboard/device?id=…</c>, one device's history, with <c>&amp;message=…</c> for a
-/// message's raw body over it; and <c>GET /dashboard/sign-out</c>. Mapped only when the dashboard
-/// is enabled.
+/// message's raw body over it; and <c>GET /dashboard/sign-out</c>. Both tables take
+/// <c>&amp;sort=…&amp;dir=…</c> for their order (#87). Mapped only when the dashboard is enabled.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -58,17 +58,22 @@ internal static class DashboardEndpoints
         return dashboard;
     }
 
+    /// <param name="sort">The column to order the devices by, unescaped from the query string. Untrusted.</param>
+    /// <param name="dir">Its direction, <c>asc</c> or <c>desc</c>. Untrusted.</param>
     private static RazorComponentResult<OverviewPage> RenderOverview(
         HttpResponse response,
         ClaimsPrincipal user,
         ReadingStore store,
-        TimeProvider timeProvider)
+        TimeProvider timeProvider,
+        string? sort,
+        string? dir)
     {
         Secure(response);
 
         return new RazorComponentResult<OverviewPage>(new Dictionary<string, object?>
         {
-            [nameof(OverviewPage.Snapshot)] = DashboardSnapshot.Create(store.Batches, timeProvider.GetUtcNow()),
+            [nameof(OverviewPage.Snapshot)] = DashboardSnapshot.Create(
+                store.Batches, timeProvider.GetUtcNow(), DashboardSorts.Devices.Parse(sort, dir)),
             [nameof(OverviewPage.SignedInAs)] = SignedInAs(user),
             [nameof(OverviewPage.RefreshSeconds)] = RefreshSeconds,
             [nameof(OverviewPage.SignOutPath)] = SignOutRoute
@@ -81,20 +86,25 @@ internal static class DashboardEndpoints
     /// </summary>
     /// <param name="id">The device ID, unescaped from the query string. Untrusted.</param>
     /// <param name="message">The message ID, or absent. Untrusted.</param>
+    /// <param name="sort">The column to order the history by. Untrusted.</param>
+    /// <param name="dir">Its direction, <c>asc</c> or <c>desc</c>. Untrusted.</param>
     private static IResult RenderDevice(
         HttpResponse response,
         ClaimsPrincipal user,
         ReadingStore store,
         TimeProvider timeProvider,
         string? id,
-        string? message)
+        string? message,
+        string? sort,
+        string? dir)
     {
         Secure(response);
         var now = timeProvider.GetUtcNow();
 
         var snapshot = string.IsNullOrEmpty(id)
             ? null
-            : DeviceSnapshot.Create(store.Batches, id, string.IsNullOrEmpty(message) ? null : message, now);
+            : DeviceSnapshot.Create(
+                store.Batches, id, string.IsNullOrEmpty(message) ? null : message, now, DashboardSorts.History.Parse(sort, dir));
 
         if (snapshot is null)
         {

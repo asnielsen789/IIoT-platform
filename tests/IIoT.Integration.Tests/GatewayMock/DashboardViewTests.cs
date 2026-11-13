@@ -5,7 +5,8 @@ namespace IIoT.Integration.Tests.GatewayMock;
 
 /// <summary>
 /// The pieces the dashboard's pages are drawn from: the level chart's geometry, the formatted
-/// JSON of a message, how times are written, and the addresses of devices and messages.
+/// JSON of a message, how times are written, the addresses of devices and messages, the tables'
+/// orders and what each series is described as.
 /// </summary>
 public class DashboardViewTests
 {
@@ -193,6 +194,93 @@ public class DashboardViewTests
     {
         Assert.Equal("/dashboard/device?id=tank%2F1%25%26%3Cb%3E", DashboardLinks.Device("tank/1%&<b>"));
         Assert.Equal("/dashboard/device?id=tank-1&message=a%26b%3D1", DashboardLinks.Message("tank-1", "a&b=1"));
+    }
+
+    /// <summary>
+    /// Firmware versions and device IDs sort as people read them: digit runs as numbers, of any
+    /// length, and every two different texts in a fixed order.
+    /// </summary>
+    [Theory]
+    [InlineData("2.9.1", "2.10.0")]
+    [InlineData("tank-9", "tank-10")]
+    [InlineData("tank-000002", "tank-000010")]
+    [InlineData("charger-000005", "tank-000001")]
+    [InlineData("1.0", "1.0.1")]
+    [InlineData("007", "7")]
+    [InlineData("9", "1000000000000000000000000000000")]
+    public void SortText_ComparesDigitRunsAsNumbers(string lower, string higher)
+    {
+        Assert.True(SortText.Compare(lower, higher) < 0, $"{lower} should sort before {higher}");
+        Assert.True(SortText.Compare(higher, lower) > 0, $"{higher} should sort after {lower}");
+        Assert.Equal(0, SortText.Compare(lower, lower));
+    }
+
+    /// <summary>
+    /// The query string is untrusted: a key that names no column means the default order, whatever
+    /// the direction says, and a direction that is neither <c>asc</c> nor <c>desc</c> means the
+    /// column's own. Keys are matched exactly.
+    /// </summary>
+    [Theory]
+    [InlineData(null, null, "device", false)]
+    [InlineData("measured", null, "measured", true)]
+    [InlineData("measured", "asc", "measured", false)]
+    [InlineData("measured", "sideways", "measured", true)]
+    [InlineData("firmware", "desc", "firmware", true)]
+    [InlineData("nonsense", "desc", "device", false)]
+    [InlineData("MEASURED", "desc", "device", false)]
+    [InlineData("<script>", "<script>", "device", false)]
+    public void Sort_FromTheQueryString_FallsBackToTheDefault(string? key, string? direction, string expectedKey, bool expectedDescending)
+    {
+        Assert.Equal(new TableSort(expectedKey, expectedDescending), DashboardSorts.Devices.Parse(key, direction));
+    }
+
+    /// <summary>
+    /// The table's own column's header reverses it; another column's starts in that column's own
+    /// direction: times, counts and quality with the newest, most or worst first, text A to Z.
+    /// </summary>
+    [Fact]
+    public void Header_ReversesItsOwnColumn_AndStartsAnotherInItsOwnDirection()
+    {
+        var byDevice = DashboardSorts.Devices.Default;
+
+        Assert.Equal(new TableSort("device", true), DashboardSorts.Devices.Next(byDevice, "device"));
+        Assert.Equal(new TableSort("measured", true), DashboardSorts.Devices.Next(byDevice, "measured"));
+        Assert.Equal(new TableSort("quality", true), DashboardSorts.Devices.Next(byDevice, "quality"));
+        Assert.Equal(new TableSort("measured", false), DashboardSorts.Devices.Next(new("measured", true), "measured"));
+        Assert.Equal(new TableSort("received", true), DashboardSorts.History.Default);
+        Assert.Equal(new TableSort("message", false), DashboardSorts.History.Next(DashboardSorts.History.Default, "message"));
+    }
+
+    [Fact]
+    public void Links_CarryTheSort_AfterTheIds()
+    {
+        Assert.Equal("/dashboard?sort=measured&dir=desc", DashboardLinks.OverviewSorted(new("measured", true)));
+        Assert.Equal("/dashboard/device?id=tank-1&sort=quality&dir=desc", DashboardLinks.Device("tank-1", new("quality", true)));
+        Assert.Equal(
+            "/dashboard/device?id=tank-1&message=m%261&sort=message&dir=asc",
+            DashboardLinks.Message("tank-1", "m&1", new("message", false)));
+    }
+
+    /// <summary>
+    /// A well-known sensor is described for what it measures; any other sensor gets its kind's
+    /// description, never a guess. Every kind of the contract has one, and the cumulative ones say
+    /// that they are running totals.
+    /// </summary>
+    [Fact]
+    public void Descriptions_NameWhatASensorMeasures_AndFallBackToTheKind()
+    {
+        Assert.Contains("oil layer", DashboardKinds.Describe(new("level", "oil")), StringComparison.Ordinal);
+        Assert.Contains("shampoo tank", DashboardKinds.Describe(new("level", "shampoo")), StringComparison.Ordinal);
+        Assert.Equal(DashboardKinds.Describe(new("level", null)), DashboardKinds.Describe(new("level", "diesel")));
+        Assert.Equal(DashboardKinds.Describe(new("count", null)), DashboardKinds.Describe(new("count", "doors")));
+
+        var unknown = DashboardKinds.Describe(new("temperature", null));
+        foreach (var kind in new[] { "level", "energy", "power", "volume", "count" })
+        {
+            var description = DashboardKinds.Describe(new(kind, null));
+            Assert.NotEqual(unknown, description);
+            Assert.Equal(DashboardKinds.IsCumulative(kind), description.Contains("running total", StringComparison.Ordinal));
+        }
     }
 
     private static ReadingView Reading(double value, string at, string? sensor = null) =>

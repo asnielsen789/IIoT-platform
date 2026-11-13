@@ -24,30 +24,33 @@ namespace IIoT.GatewayMock.Dashboard;
 /// <param name="BatchCount">How many batches the mock holds.</param>
 /// <param name="ReadingCount">How many readings those batches hold.</param>
 /// <param name="LastStoredAt">When the newest batch was stored, or <c>null</c> before the first.</param>
-/// <param name="Devices">One summary per device, ordered by device ID.</param>
+/// <param name="Devices">One summary per device, in the order <paramref name="Sort"/> names.</param>
+/// <param name="Sort">The order of <paramref name="Devices"/> (<see cref="DashboardSorts.Devices"/>).</param>
 public sealed record DashboardSnapshot(
     DateTimeOffset TakenAt,
     int BatchCount,
     int ReadingCount,
     DateTimeOffset? LastStoredAt,
-    IReadOnlyList<DeviceSummary> Devices)
+    IReadOnlyList<DeviceSummary> Devices,
+    TableSort Sort)
 {
-    public static DashboardSnapshot Create(IReadOnlyList<StoredBatch> batches, DateTimeOffset takenAt)
+    /// <param name="sort">The devices' order, or <c>null</c> for the default, A to Z by device ID.</param>
+    public static DashboardSnapshot Create(IReadOnlyList<StoredBatch> batches, DateTimeOffset takenAt, TableSort? sort = null)
     {
         var views = batches.Select(BatchView.From).ToList();
+        var order = sort ?? DashboardSorts.Devices.Default;
 
         var devices = views
             .GroupBy(batch => batch.DeviceId, StringComparer.Ordinal)
-            .Select(device => DeviceSummary.From(device.Key, device.ToList()))
-            .OrderBy(device => device.DeviceId, StringComparer.Ordinal)
-            .ToList();
+            .Select(device => DeviceSummary.From(device.Key, device.ToList()));
 
         return new DashboardSnapshot(
             takenAt,
             views.Count,
             views.Sum(batch => batch.Readings.Count),
             views.Count == 0 ? null : views.Max(batch => batch.StoredAt),
-            devices);
+            DashboardSorts.Devices.Order(devices, order),
+            order);
     }
 
     /// <summary>
@@ -129,15 +132,21 @@ public sealed record SeriesLatest(SeriesKey Key, ReadingView Reading, BatchView 
 /// </summary>
 /// <param name="TakenAt">When the snapshot was taken, by the mock's clock.</param>
 /// <param name="Device">The device's summary, as on the overview.</param>
-/// <param name="NewestBatches">Its most recently stored batches, newest first, at most <see cref="MaxBatchesShown"/>.</param>
+/// <param name="NewestBatches">
+/// Its most recently stored batches, at most <see cref="MaxBatchesShown"/>, in the order
+/// <paramref name="Sort"/> names. The order applies to those: sorting the history never brings an
+/// older message into it.
+/// </param>
 /// <param name="Trends">One chart per kind, in kind order, each with a line per sensor.</param>
 /// <param name="Selected">The message chosen for the modal, or <c>null</c>.</param>
+/// <param name="Sort">The order of <paramref name="NewestBatches"/> (<see cref="DashboardSorts.History"/>).</param>
 public sealed record DeviceSnapshot(
     DateTimeOffset TakenAt,
     DeviceSummary Device,
     IReadOnlyList<BatchView> NewestBatches,
     IReadOnlyList<Trend> Trends,
-    SelectedMessage? Selected)
+    SelectedMessage? Selected,
+    TableSort Sort)
 {
     /// <summary>
     /// The store is unbounded and the page refreshes itself; rendering every batch ever received
@@ -153,8 +162,9 @@ public sealed record DeviceSnapshot(
     /// from it, or when <paramref name="messageId"/> names a message it does not hold from it.
     /// </summary>
     /// <param name="messageId">The message to show in the modal, or <c>null</c> for none.</param>
+    /// <param name="sort">The history's order, or <c>null</c> for the default, newest first.</param>
     public static DeviceSnapshot? Create(
-        IReadOnlyList<StoredBatch> batches, string deviceId, string? messageId, DateTimeOffset takenAt)
+        IReadOnlyList<StoredBatch> batches, string deviceId, string? messageId, DateTimeOffset takenAt, TableSort? sort = null)
     {
         var stored = batches.Where(batch => string.Equals(batch.DeviceId, deviceId, StringComparison.Ordinal)).ToList();
         if (stored.Count == 0)
@@ -189,12 +199,16 @@ public sealed record DeviceSnapshot(
             .Select(kind => Trend.Create(kind.Key, kind.ToList()))
             .ToList();
 
+        var order = sort ?? DashboardSorts.History.Default;
+        var newest = views.OrderByDescending(batch => batch.Sequence).Take(MaxBatchesShown);
+
         return new DeviceSnapshot(
             takenAt,
             DeviceSummary.From(deviceId, views),
-            views.OrderByDescending(batch => batch.Sequence).Take(MaxBatchesShown).ToList(),
+            DashboardSorts.History.Order(newest, order),
             trends,
-            selected);
+            selected,
+            order);
     }
 }
 
@@ -236,6 +250,9 @@ public sealed record BatchView(
 
     internal static string? Worst(IEnumerable<string?> qualities) =>
         qualities.Where(quality => quality is not null).OrderByDescending(QualityRank).FirstOrDefault();
+
+    /// <summary>How untrustworthy a quality is, for sorting: higher is worse; <c>null</c> without one.</summary>
+    internal static int? Rank(string? quality) => quality is null ? null : QualityRank(quality);
 
     /// <remarks>
     /// Every body in the store passed the schema, so each field is present and of its type. The
