@@ -33,7 +33,7 @@ internal static class DashboardEndpoints
 
     /// <summary>
     /// Often enough to watch a reading arrive during a demonstration; each refresh is one small
-    /// in-memory read.
+    /// in-memory read. Only the first page after a restart reads the archive (ADR-012).
     /// </summary>
     public const int RefreshSeconds = 10;
 
@@ -60,15 +60,18 @@ internal static class DashboardEndpoints
 
     /// <param name="sort">The column to order the devices by, unescaped from the query string. Untrusted.</param>
     /// <param name="dir">Its direction, <c>asc</c> or <c>desc</c>. Untrusted.</param>
-    private static RazorComponentResult<OverviewPage> RenderOverview(
+    private static async Task<RazorComponentResult<OverviewPage>> RenderOverview(
         HttpResponse response,
         ClaimsPrincipal user,
+        ReadingHistory history,
         ReadingStore store,
         TimeProvider timeProvider,
         string? sort,
-        string? dir)
+        string? dir,
+        CancellationToken cancellationToken)
     {
         Secure(response);
+        await history.EnsureRestoredAsync(cancellationToken);
 
         return new RazorComponentResult<OverviewPage>(new Dictionary<string, object?>
         {
@@ -88,17 +91,20 @@ internal static class DashboardEndpoints
     /// <param name="message">The message ID, or absent. Untrusted.</param>
     /// <param name="sort">The column to order the history by. Untrusted.</param>
     /// <param name="dir">Its direction, <c>asc</c> or <c>desc</c>. Untrusted.</param>
-    private static IResult RenderDevice(
+    private static async Task<IResult> RenderDevice(
         HttpResponse response,
         ClaimsPrincipal user,
+        ReadingHistory history,
         ReadingStore store,
         TimeProvider timeProvider,
         string? id,
         string? message,
         string? sort,
-        string? dir)
+        string? dir,
+        CancellationToken cancellationToken)
     {
         Secure(response);
+        await history.EnsureRestoredAsync(cancellationToken);
         var now = timeProvider.GetUtcNow();
 
         var snapshot = string.IsNullOrEmpty(id)

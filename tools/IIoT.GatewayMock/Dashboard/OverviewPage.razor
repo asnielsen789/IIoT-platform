@@ -2,6 +2,8 @@
     The overview: totals, and one row per device that links to the device's page. Every column's
     header sorts the devices by it (#87).
 *@
+@using IIoT.GatewayMock.Readings
+@inject ReadingHistory History
 <DashboardShell Title="Overview" SignedInAs="@SignedInAs" SignOutPath="@SignOutPath"
                 TakenAt="@Snapshot.TakenAt" RefreshSeconds="@RefreshSeconds">
     <h1>Overview</h1>
@@ -38,7 +40,7 @@
         {
             <div class="empty">
                 <Icon Name="tank" Size="40" />
-                <p>No messages received since the mock started.</p>
+                <p>No messages received@(History.IsArchived ? " in the retention period" : " since the mock started").</p>
             </div>
         }
         else

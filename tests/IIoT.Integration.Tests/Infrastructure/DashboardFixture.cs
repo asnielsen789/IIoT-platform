@@ -1,5 +1,6 @@
 using System.Net;
 using IIoT.GatewayMock.Dashboard;
+using IIoT.GatewayMock.Readings;
 using Microsoft.AspNetCore.Authentication.OpenIdConnect;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.Mvc.Testing;
@@ -32,6 +33,16 @@ public sealed class DashboardFixture : IDisposable
     public const string TrustedProxyNetwork = "10.0.0.0/8";
 
     public DashboardFixture()
+        : this(archive: null)
+    {
+    }
+
+    /// <param name="archive">
+    /// The archive the mock keeps what it accepts in, as with <c>GatewayMock:Archive</c> set; a mock
+    /// built later with the same archive is this one after a restart. <c>null</c>, memory only.
+    /// Not public: a class fixture may have only one public constructor.
+    /// </param>
+    internal DashboardFixture(IReadingArchive? archive)
     {
         Issuer = new TestTokenIssuer();
         Provider = new TestOidcProvider();
@@ -44,7 +55,14 @@ public sealed class DashboardFixture : IDisposable
 
         settings["GatewayMock:ForwardedHeaders:KnownNetworks:0"] = TrustedProxyNetwork;
 
-        Factory = new GatewayMockFactory(settings, services => StandInForTheProvider(services, Provider));
+        Factory = new GatewayMockFactory(settings, services =>
+        {
+            StandInForTheProvider(services, Provider);
+            if (archive is not null)
+            {
+                services.AddSingleton(archive);
+            }
+        });
     }
 
     public TestTokenIssuer Issuer { get; }

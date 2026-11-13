@@ -1,6 +1,6 @@
 // The downstream gateway mock (tools/IIoT.GatewayMock), hosted so that the Function in Azure has
 // a gateway to forward to (#15). A development tool, not a gateway: it validates the readings
-// contract and the bearer token, and keeps what it accepts in memory.
+// contract and the bearer token, and keeps what it accepts in an archive of its own (ADR-012).
 //
 // App Service on the free tier (F1), Linux: no cost, HTTPS on its azurewebsites.net name with a
 // platform certificate, and the .NET 10 runtime built in, so the mock is deployed as a plain
@@ -8,11 +8,16 @@
 // unloads when idle, and the first request after that waits for it to start. That suits a mock
 // that receives a message every few hours. It also has a daily CPU quota of 60 minutes.
 //
-// The API needs no Azure access. Its configuration is three public values, the issuer and
-// audience it accepts tokens for. The dashboard (#47) is optional: with `dashboardAuthority` set,
-// the app gets a system-assigned identity that can read exactly two Key Vault secrets, the
-// dashboard's client ID and secret at the identity provider, through Key Vault references.
-// Without it, the app has no identity and no role, as before.
+// The archive is a storage account of the mock's own, next to it, not a container in the
+// platform's: the Function's identity is Storage Blob Data Owner on the platform's account, and the
+// platform stores no readings (ADR-005, ADR-008), so it must not be able to read the receiver's.
+// An operator who drops this module drops the receiver's data with it.
+//
+// The app has a system-assigned identity, for two things: a data role on the archive's one
+// container, and, with the optional dashboard (#47) on, read access to exactly two Key Vault
+// secrets, the dashboard's client ID and secret at the identity provider, through Key Vault
+// references. The API's own configuration is three public values, the issuer and audience it
+// accepts tokens for.
 
 @description('Name of the App Service plan.')
 param planName string
@@ -23,7 +28,7 @@ param name string
 @description('Azure region.')
 param location string
 
-@description('Tags applied to both resources.')
+@description('Tags applied to every resource.')
 param tags { *: string }
 
 @description('OpenID Connect issuer whose tokens the mock accepts: the Function\'s identity provider, with the trailing slash its tokens carry in `iss`. Its discovery document supplies the signing keys.')
@@ -44,10 +49,98 @@ param dashboardClientIdSecretName string
 @description('Name of the secret holding the dashboard\'s client secret. It must exist before a deployment that turns the dashboard on.')
 param dashboardClientSecretSecretName string
 
+@description('Name of the archive\'s storage account (ADR-012): 3-24 lowercase letters and digits, globally unique.')
+@minLength(3)
+@maxLength(24)
+param archiveStorageAccountName string
+
+@description('Days the archive keeps a batch. A lifecycle rule deletes blobs older than this, about once a day.')
+@minValue(1)
+param archiveRetentionDays int
+
 var dashboard = !empty(dashboardAuthority)
 
-// Built-in role definition ID.
+// The archive's one container. The mock reads the name from its setting, not from code.
+var archiveContainerName = 'readings'
+
+// Built-in role definition IDs.
 var keyVaultSecretsUserRoleId = '4633458b-17de-408a-b874-0445c86b69e6'
+var storageBlobDataContributorRoleId = 'ba92f5b4-2d11-453d-a403-e96b0029c9fe'
+
+// The archive (ADR-012): one JSON blob per accepted batch, the request body as it arrived. The
+// same settings as the platform's account: Entra ID only, no shared keys, no public blobs, TLS 1.2.
+resource archiveStorageAccount 'Microsoft.Storage/storageAccounts@2026-06-01' = {
+  name: archiveStorageAccountName
+  location: location
+  tags: tags
+  kind: 'StorageV2'
+  sku: {
+    name: 'Standard_LRS'
+  }
+  properties: {
+    accessTier: 'Hot'
+    allowBlobPublicAccess: false
+    allowSharedKeyAccess: false
+    defaultToOAuthAuthentication: true
+    minimumTlsVersion: 'TLS1_2'
+    supportsHttpsTrafficOnly: true
+    publicNetworkAccess: 'Enabled'
+    networkAcls: {
+      defaultAction: 'Allow'
+      bypass: 'AzureServices'
+    }
+  }
+}
+
+resource archiveBlobService 'Microsoft.Storage/storageAccounts/blobServices@2026-06-01' = {
+  parent: archiveStorageAccount
+  name: 'default'
+}
+
+// Declared here, so that the mock never needs the right to create a container.
+resource archiveContainer 'Microsoft.Storage/storageAccounts/blobServices/containers@2026-06-01' = {
+  parent: archiveBlobService
+  name: archiveContainerName
+  properties: {
+    publicAccess: 'None'
+  }
+}
+
+// Retention. The service runs the rule about once a day, so a blob can outlive the period by up to
+// a day. Deleting costs nothing
+// (https://learn.microsoft.com/azure/storage/blobs/lifecycle-management-overview).
+resource archiveRetention 'Microsoft.Storage/storageAccounts/managementPolicies@2026-06-01' = {
+  parent: archiveStorageAccount
+  name: 'default'
+  properties: {
+    policy: {
+      rules: [
+        {
+          name: 'retention'
+          enabled: true
+          type: 'Lifecycle'
+          definition: {
+            filters: {
+              blobTypes: [
+                'blockBlob'
+              ]
+              prefixMatch: [
+                '${archiveContainer.name}/'
+              ]
+            }
+            actions: {
+              baseBlob: {
+                delete: {
+                  daysAfterCreationGreaterThan: archiveRetentionDays
+                }
+              }
+            }
+          }
+        }
+      ]
+    }
+  }
+}
 
 resource keyVault 'Microsoft.KeyVault/vaults@2026-05-15' existing = {
   name: keyVaultName
@@ -85,9 +178,10 @@ resource app 'Microsoft.Web/sites@2025-03-01' = {
   location: location
   tags: tags
   kind: 'app,linux'
-  // System-assigned: it exists only for this app's Key Vault references, and goes with the app.
+  // System-assigned: it exists only for this app's archive and Key Vault references, and goes
+  // with the app.
   identity: {
-    type: dashboard ? 'SystemAssigned' : 'None'
+    type: 'SystemAssigned'
   }
   properties: {
     serverFarmId: plan.id
@@ -115,6 +209,16 @@ resource app 'Microsoft.Web/sites@2025-03-01' = {
           {
             name: 'GatewayMock__Jwt__Audience'
             value: jwtAudience
+          }
+          // ReadingArchiveOptions (tools/IIoT.GatewayMock/Readings): the container switches the
+          // archive on; the app reaches it with its own identity, never a key or a SAS token.
+          {
+            name: 'GatewayMock__Archive__ContainerUri'
+            value: '${archiveStorageAccount.properties.primaryEndpoints.blob}${archiveContainer.name}'
+          }
+          {
+            name: 'GatewayMock__Archive__Credential'
+            value: 'managedidentity'
           }
         ],
         dashboard
@@ -148,6 +252,22 @@ resource app 'Microsoft.Web/sites@2025-03-01' = {
           : []
       )
     }
+  }
+}
+
+// The archive: read, list and create blobs in its one container. Storage Blob Data Contributor is
+// the narrowest built-in role that can write a blob; it also allows deleting and overwriting them,
+// which the mock never does (its writes are create-only, ADR-012). A custom role without delete is
+// a candidate for the security review (#21). Until the assignment has propagated, minutes after a
+// first deployment, a write is refused: the mock answers 503 and the Function delivers again
+// (ADR-010).
+resource archiveBlobDataContributor 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  name: guid(archiveContainer.id, app.id, storageBlobDataContributorRoleId)
+  scope: archiveContainer
+  properties: {
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', storageBlobDataContributorRoleId)
+    principalId: app.identity.principalId
+    principalType: 'ServicePrincipal'
   }
 }
 
@@ -219,3 +339,6 @@ output name string = app.name
 
 @description('Host name of the web app. The Function forwards to https://<this>/v1/readings.')
 output defaultHostName string = app.properties.defaultHostName
+
+@description('Name of the archive\'s storage account.')
+output archiveStorageAccountName string = archiveStorageAccount.name
