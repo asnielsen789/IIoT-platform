@@ -47,6 +47,24 @@ builder.Services.AddProblemDetails();
 builder.Services.AddSingleton<ReadingStore>();
 builder.Services.AddSingleton(TimeProvider.System);
 
+// The archive is opt-in too (ADR-012). Without GatewayMock:Archive:ContainerUri the mock holds
+// what it accepts in memory only, and a restart empties it.
+var archiveEnabled = ReadingArchiveOptions.IsEnabled(builder.Configuration);
+if (archiveEnabled)
+{
+    builder.Services.AddOptions<ReadingArchiveOptions>()
+        .BindConfiguration(ReadingArchiveOptions.SectionName)
+        .ValidateOnStart();
+    builder.Services.AddSingleton<IValidateOptions<ReadingArchiveOptions>, ReadingArchiveOptionsValidator>();
+    builder.Services.AddSingleton<IReadingArchive, BlobReadingArchive>();
+}
+
+// Takes whichever archive is registered: none, the blob container, or a test's stand-in.
+builder.Services.AddSingleton(services => new ReadingHistory(
+    services.GetRequiredService<ReadingStore>(),
+    services.GetService<IReadingArchive>(),
+    services.GetRequiredService<ILogger<ReadingHistory>>()));
+
 var app = builder.Build();
 
 // First, so that everything after it, the sign-in included, sees the scheme the browser used.
@@ -69,6 +87,19 @@ else
 {
     app.Logger.LogInformation(
         "Dashboard disabled: {Setting} is not set", $"{DashboardOptions.SectionName}:{nameof(DashboardOptions.Authority)}");
+}
+
+if (archiveEnabled)
+{
+    app.Logger.LogInformation(
+        "Archive enabled: accepted batches are kept in {Container}",
+        app.Services.GetRequiredService<IOptions<ReadingArchiveOptions>>().Value.ContainerUri);
+}
+else
+{
+    app.Logger.LogInformation(
+        "Archive disabled: {Setting} is not set; accepted batches are held in memory only",
+        $"{ReadingArchiveOptions.SectionName}:{nameof(ReadingArchiveOptions.ContainerUri)}");
 }
 
 app.Run();

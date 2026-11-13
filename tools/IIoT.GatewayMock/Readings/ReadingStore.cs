@@ -17,13 +17,19 @@ namespace IIoT.GatewayMock.Readings;
 /// </para>
 /// <para>
 /// Unbounded, because the mock is a development tool that never ships. A real receiver would
-/// expire keys after its replay window.
+/// expire keys after its replay window. With the archive configured (ADR-012), it bounds what a
+/// restart brings back: its retention rule deletes older batches.
+/// </para>
+/// <para>
+/// Memory only. <see cref="ReadingHistory"/> puts the archive in front of it; the endpoint stores
+/// through that, and tests and the dashboard read from here.
 /// </para>
 /// </remarks>
 public sealed class ReadingStore
 {
     private readonly ConcurrentDictionary<(string DeviceId, string IdempotencyKey), StoredBatch> _batches = new();
     private long _sequence;
+    private long _restoredSequence = 1;
 
     /// <summary>Every stored batch, in the order it was accepted.</summary>
     public IReadOnlyList<StoredBatch> Batches =>
@@ -40,10 +46,27 @@ public sealed class ReadingStore
 
         return _batches.TryAdd((deviceId, idempotencyKey), batch);
     }
+
+    /// <summary>
+    /// Adds a batch accepted before this process started, read back from the archive. It is placed
+    /// in front of every batch this process accepted itself, and of every batch restored before it:
+    /// restore the newest first. Restored batches have sequence numbers of zero and below.
+    /// </summary>
+    /// <returns><c>true</c> if added; <c>false</c> if memory already held it.</returns>
+    public bool TryRestore(string deviceId, string idempotencyKey, JsonElement body, string? caller, DateTimeOffset storedAt)
+    {
+        var batch = new StoredBatch(
+            Interlocked.Decrement(ref _restoredSequence), deviceId, idempotencyKey, caller, storedAt, body.Clone());
+
+        return _batches.TryAdd((deviceId, idempotencyKey), batch);
+    }
 }
 
 /// <summary>One accepted batch, as the gateway received it.</summary>
-/// <param name="Sequence">Arrival order.</param>
+/// <param name="Sequence">
+/// Arrival order. Batches read back from the archive after a restart come first, with numbers of
+/// zero and below.
+/// </param>
 /// <param name="DeviceId">The batch's <c>deviceId</c>.</param>
 /// <param name="IdempotencyKey">The request's <c>Idempotency-Key</c> header.</param>
 /// <param name="Caller">The token's <c>sub</c> claim: which client delivered it.</param>

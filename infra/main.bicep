@@ -55,6 +55,11 @@ param gatewayMockLocation string = location
 ])
 param gatewayContractVersion int = 1
 
+@description('Days the gateway mock keeps the batches it accepts (ADR-012, #89). A lifecycle rule on its archive container deletes older ones, once a day.')
+@minValue(1)
+@maxValue(365)
+param gatewayMockArchiveRetentionDays int = 30
+
 @description('OpenID Connect issuer people sign in to the gateway mock\'s dashboard with (#47), with its trailing slash; for Auth0, `https://<tenant domain>/`. Empty leaves the dashboard off. When set, the secrets `gateway-mock-dashboard-client-id` and `gateway-mock-dashboard-client-secret` must exist in the vault first. Not a secret.')
 param gatewayMockDashboardAuthority string = ''
 
@@ -84,10 +89,10 @@ var gatewayMockRegionAbbreviations = {
 }
 var gatewayMockNameStem = toLower('${workload}-${environmentName}-${gatewayMockRegionAbbreviations[gatewayMockLocation]}')
 
-// Four of the resources have globally unique DNS names (IoT Hub, Function App, Key Vault,
-// storage account). They get a short suffix that is deterministic per subscription and
-// environment, so redeploying finds the same resources. Four characters keep the Key Vault
-// name within 24.
+// Seven of the resources have globally unique DNS names: the IoT Hub, DPS, the Function App, the
+// Key Vault, the gateway mock and the two storage accounts. They get a short suffix that is
+// deterministic per subscription and environment, so redeploying finds the same resources. Four
+// characters keep the Key Vault name and the mock's storage account name within 24.
 var uniqueSuffix = take(uniqueString(subscription().subscriptionId, environmentName), 4)
 
 // Every name is fixed here, before deployment, from Cloud Adoption Framework abbreviations.
@@ -107,6 +112,9 @@ var names = {
   provisioningService: 'provs-${nameStem}-${uniqueSuffix}'
   gatewayMockPlan: 'asp-${gatewayMockNameStem}-gateway-mock'
   gatewayMockApp: 'app-${gatewayMockNameStem}-gateway-mock-${uniqueSuffix}'
+  // 24 characters in staging, the most a storage account name allows: one more in the environment
+  // name would not fit. Its region is the mock's.
+  gatewayMockArchive: 'st${replace(gatewayMockNameStem, '-', '')}mock${uniqueSuffix}'
 }
 
 var tags = {
@@ -287,6 +295,8 @@ module gatewayMock 'modules/gateway-mock.bicep' = {
     keyVaultName: keyVault.outputs.name
     dashboardClientIdSecretName: gatewayMockDashboardClientIdSecretName
     dashboardClientSecretSecretName: gatewayMockDashboardClientSecretSecretName
+    archiveStorageAccountName: names.gatewayMockArchive
+    archiveRetentionDays: gatewayMockArchiveRetentionDays
   }
 }
 
@@ -367,6 +377,9 @@ output applicationInsightsName string = monitoring.outputs.applicationInsightsNa
 
 @description('Gateway mock web app name, for deploying the mock and tailing its log.')
 output gatewayMockAppName string = gatewayMock.outputs.name
+
+@description('Storage account of the gateway mock\'s archive (ADR-012).')
+output gatewayMockArchiveStorageAccountName string = gatewayMock.outputs.archiveStorageAccountName
 
 @description('Device Provisioning Service name, for the enrollment group and its CA (#48).')
 output provisioningServiceName string = provisioningService.outputs.name

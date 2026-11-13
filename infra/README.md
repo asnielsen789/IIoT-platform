@@ -26,7 +26,7 @@ monitoring.
 | `modules/iot-hub.bicep` | IoT Hub: shared access policies, message routing, the Function's consumer group, resource logs |
 | `modules/iot-hub-connection-secret.bicep` | Builds the Function's IoT Hub connection string and writes it to Key Vault |
 | `modules/function-app.bicep` | Flex Consumption plan and Function App |
-| `modules/gateway-mock.bicep` | The gateway mock on App Service (free tier), the Function's downstream gateway in staging ([Gateway mock](#gateway-mock)), and optionally its dashboard's identity and Key Vault references ([Gateway mock dashboard (one-time)](#gateway-mock-dashboard-one-time)) |
+| `modules/gateway-mock.bicep` | The gateway mock on App Service (free tier), the Function's downstream gateway in staging ([Gateway mock](#gateway-mock)): its identity, its archive's storage account with the container `readings`, its retention rule and the app's role on it ([ADR-012](../docs/adr/adr-012-gateway-mock-archive.md)), and optionally its dashboard's Key Vault references ([Gateway mock dashboard (one-time)](#gateway-mock-dashboard-one-time)) |
 | `modules/provisioning-service.bicep` | The Device Provisioning Service, linked to the IoT Hub through the hub's `dps-link` policy, for zero-touch provisioning ([Device Provisioning Service](#device-provisioning-service)) |
 | `modules/github-deployment.bicep` | Managed identity the deploy workflow logs in with: its GitHub federated credential and its role on the Function App |
 
@@ -71,8 +71,8 @@ az deployment sub what-if \
 
 `--location` is where Azure stores the deployment record; the resources take their region from
 the parameter file. Treat what-if output as internal: do not paste it into issues, pull
-requests or commits. On a subscription where nothing is deployed yet, the plan is 33 resources
-to create.
+requests or commits. On a subscription where nothing is deployed yet, the plan is 38 resources
+to create, and 40 with the gateway mock's dashboard on.
 
 ## Deploy
 
@@ -138,7 +138,7 @@ az deployment sub what-if \
   --parameters infra/environments/staging.bicepparam
 ```
 
-The first time, expect **33 resources to create**: the resource group; the IoT Hub, its consumer
+The first time, expect **38 resources to create**, or 40 with the dashboard on: the resource group; the IoT Hub, its consumer
 group `telemetry-function` and its diagnostic setting `routes-and-connections`; the Log
 Analytics workspace and Application Insights; the Key Vault with its role assignment, the
 secret `iothub-telemetry-connection` and the device CA keys `device-ca-root` and
@@ -147,8 +147,10 @@ service, container `app-package`, queue service, queues `forwarding-failed` and
 `forwarding-failed-poison` and four role assignments, two of them on the queues; the Flex
 Consumption plan and the Function App; the deployment identity `id-iiot-staging-neu-github`, its federated credential
 `github-staging` and its role assignment on the Function App; the gateway mock's App Service
-plan and web app, its two basic-auth publishing policies (`scm`, `ftp`) and its log settings;
-the Device Provisioning Service. In the IoT Hub's properties, check
+plan and web app, its two basic-auth publishing policies (`scm`, `ftp`) and its log settings,
+its archive's storage account with its blob service, container `readings`, lifecycle policy and
+the app's role assignment on the container, and with the dashboard on its two role assignments on
+the dashboard's secrets; the Device Provisioning Service. In the IoT Hub's properties, check
 `routing`: the route `telemetry-v1` with the condition `$body.schemaVersion = 1` to `events`,
 and `fallbackRoute` enabled to `events`. In the federated credential, check `subject`: it must
 end in `:environment:staging`. What-if masks the Function App's `siteConfig`, so its app
@@ -174,7 +176,14 @@ changes nothing else ([Dead-letter queues](#dead-letter-queues)). Deploy it befo
 uses it reaches the app; the other way round, `RetryForwarding` stays disabled until the settings
 exist. The first deployment after the Device Provisioning Service was added creates it, adds the
 policy `dps-link` to the IoT Hub, and changes nothing else
-([Device Provisioning Service](#device-provisioning-service)).
+([Device Provisioning Service](#device-provisioning-service)). The first deployment after the
+gateway mock's archive was added creates five resources: the storage account
+`stiiotstagingsdcmock<suffix>`, its blob service, the container `readings`, the lifecycle policy
+`default` and the mock's role assignment on the container. It gives the mock a system-assigned
+identity if it has none, which it already has with the dashboard on, adds two
+`GatewayMock__Archive__*` settings to the mock, and changes nothing else. Code older than the
+archive ignores the settings, so either order of deploying and publishing works. Publish the mock
+afterwards ([Gateway mock](#gateway-mock)) to switch the archive on.
 `what-if` does not show app settings at all, since Azure does not return them with the site, so
 that change is not in the plan; step 5 checks it afterwards. Once the CA keys exist, `what-if`
 also lists them as `Modify` with `rotationPolicy` to be deleted: noise, like the role
@@ -565,8 +574,39 @@ delivered by <client-id>@clients`, which you can follow with:
 az webapp log tail --resource-group "$RG" --name "$MOCK_APP"
 ```
 
-The mock keeps what it accepts in memory, so a restart, or the app unloading when idle, empties
-it.
+### The mock's archive
+
+The mock keeps every batch it accepts as a JSON blob in a storage account of its own, so a
+restart, or the app unloading when idle, no longer empties the dashboard
+([ADR-012](../docs/adr/adr-012-gateway-mock-archive.md)). The blobs are the request bodies as the
+Function sent them, named `<device>/<message ID>.json`, and are deleted after
+`gatewayMockArchiveRetentionDays` days (30 in staging). After a deployment that creates the
+archive's role, the mock's writes are refused until the assignment has propagated, a few minutes.
+The mock answers `503` meanwhile, and the Function retries and dead-letters as for any gateway
+outage. Its log says `Archive enabled: accepted batches are kept in https://…/readings` on startup.
+
+To read the archive yourself, give yourself a data role on the container. Being Owner of the
+subscription is not enough: Owner manages the account and grants no data access, and the account
+takes no keys.
+
+```sh
+ME=$(az ad signed-in-user show --query id -o tsv | tr -d '\r')
+ARCHIVE=$(output gatewayMockArchiveStorageAccountName)
+ARCHIVE_ID=$(az storage account show --resource-group "$RG" --name "$ARCHIVE" --query id -o tsv | tr -d '\r')
+MSYS_NO_PATHCONV=1 az role assignment create --assignee-object-id "$ME" --assignee-principal-type User \
+  --role "Storage Blob Data Reader" --scope "$ARCHIVE_ID/blobServices/default/containers/readings" -o none
+
+# What is there, and when the mock stored each
+az storage blob list --account-name "$ARCHIVE" --container-name readings --auth-mode login \
+  --query "[].{name:name, stored:metadata.storedat}" -o table
+
+# All of it, as files
+az storage blob download-batch --account-name "$ARCHIVE" --source readings --destination ./mock-archive --auth-mode login
+```
+
+A new role assignment can take a few minutes to apply; until then the commands answer
+`AuthorizationPermissionMismatch`. Remove the role again when done, with `az role assignment
+delete` and the same arguments.
 
 ## Gateway mock dashboard (one-time)
 
@@ -662,8 +702,17 @@ It worked when all of these hold:
 - `POST /v1/readings` without a token is still `401`.
 
 To turn the dashboard off, set `gatewayMockDashboardAuthority` to `''` and deploy. The app then
-loses its identity and its settings. Its role assignments stay until they are deleted, and they
-grant nothing to an identity that no longer exists.
+loses its dashboard settings but keeps its identity, which the archive uses. A deployment does not
+remove the two role assignments on the dashboard's secrets, and they still apply to that identity,
+so delete them:
+
+```sh
+MOCK_PRINCIPAL=$(az webapp identity show --resource-group "$RG" --name "$MOCK_APP" --query principalId -o tsv | tr -d '\r')
+for secret in gateway-mock-dashboard-client-id gateway-mock-dashboard-client-secret; do
+  MSYS_NO_PATHCONV=1 az role assignment delete --assignee "$MOCK_PRINCIPAL" --role "Key Vault Secrets User" \
+    --scope "$KV_ID/secrets/$secret"
+done
+```
 
 ## Dead-lettered messages
 
@@ -1582,7 +1631,7 @@ never falls back to DPS. It is a test tool, and the operator decides when a devi
 
 Names follow the Cloud Adoption Framework abbreviations:
 `<abbreviation>-<workload>-<environment>-<region>`, with workload `iiot` and region code `neu`
-for North Europe. The four resources whose names are global DNS names also get a four-character
+for North Europe. The seven resources whose names are global DNS names also get a four-character
 suffix, written `xxxx` below. It comes from `uniqueString()` over the subscription ID and the
 environment name, so it is stable across redeployments and differs between subscriptions.
 
@@ -1600,10 +1649,11 @@ environment name, so it is stable across redeployments and differs between subsc
 | Function App | `func-iiot-staging-neu-xxxx` |
 | Gateway mock's App Service plan | `asp-iiot-staging-sdc-gateway-mock` (in Sweden Central: [Gateway mock](#gateway-mock-1)) |
 | Gateway mock | `app-iiot-staging-sdc-gateway-mock-xxxx` |
+| Gateway mock's archive | `stiiotstagingsdcmockxxxx`, in Sweden Central with the mock: 24 characters, the most a storage account name allows |
 | Device Provisioning Service | `provs-iiot-staging-neu-xxxx` |
 
-Key Vault names are limited to 24 characters, which is why the environment name is limited to
-seven. The deploy workflow's identity takes the qualifier `-github` after the usual name, which
+Key Vault and storage account names are limited to 24 characters, which is why the environment
+name is limited to seven. The deploy workflow's identity takes the qualifier `-github` after the usual name, which
 tells it apart from the app's. Every resource carries the tags `workload`, `environment` and
 `managed-by: bicep`.
 
@@ -1829,10 +1879,10 @@ duration.
 
 The Function's downstream gateway in staging, so that a message can be followed from the device
 to a receiver ([#15](https://github.com/asnielsen789/IIoT-platform/issues/15)). It is a mock, not
-a gateway: it checks the bearer token and the readings contract, and keeps what it accepts in
-memory. An operator with a real downstream system drops the module and points the Function's
-gateway address at that system instead, with `gatewayContractVersion` set to the version it
-speaks.
+a gateway: it checks the bearer token and the readings contract, and keeps what it accepts in an
+archive of its own ([ADR-012](../docs/adr/adr-012-gateway-mock-archive.md)). An operator with a
+real downstream system drops the module, archive included, and points the Function's gateway
+address at that system instead, with `gatewayContractVersion` set to the version it speaks.
 
 - **App Service, free tier (F1), Linux.** It costs nothing, serves HTTPS on its
   `azurewebsites.net` name with a platform certificate, and has the .NET 10 runtime built in, so
@@ -1856,14 +1906,24 @@ speaks.
   the names change, so the next deployment creates a new app; publish to it and delete the old
   plan and app. A plan's quota can be checked without creating anything by validating a minimal
   template with `az deployment group validate`.
-- **No Azure access for the API.** Its configuration is the issuer and the audience it accepts
-  tokens for, both public.
-- **The dashboard reads two secrets, and nothing else.** With `gatewayMockDashboardAuthority`
-  set, the app gets a system-assigned identity and Key Vault Secrets User on exactly the two
-  secrets `gateway-mock-dashboard-client-id` and `gateway-mock-dashboard-client-secret`, scoped
+- **The archive is the mock's own storage account, not a container in the platform's.** The
+  Function's identity is Storage Blob Data Owner on the platform's account, and the platform
+  stores no readings (ADR-005, ADR-008), so the receiver's data sits where the platform cannot
+  read it. The account is in the mock's region, so the archive adds no traffic between regions,
+  and it has the platform account's settings: Entra ID only, shared keys disabled, no public
+  blobs, TLS 1.2. A lifecycle rule deletes blobs older than `gatewayMockArchiveRetentionDays`.
+  At the reference fleet's volume it costs well under 1 DKK a month (ADR-012, "Cost").
+- **The app's identity: one container and, with the dashboard, two secrets.** The app has a
+  system-assigned identity with Storage Blob Data Contributor on the archive's container
+  `readings`, the narrowest built-in role that can write a blob. It also allows deletes and
+  overwrites, which the mock never makes, so a custom role is a candidate for the
+  [security review (#21)](https://github.com/asnielsen789/IIoT-platform/issues/21). With
+  `gatewayMockDashboardAuthority` set, the identity also has Key Vault Secrets User on exactly the
+  two secrets `gateway-mock-dashboard-client-id` and `gateway-mock-dashboard-client-secret`, scoped
   to each secret rather than the vault. The vault also holds the Function's IoT Hub connection
-  string and gateway credentials, which the mock cannot read. Without the parameter, the app has
-  no identity and no role ([Gateway mock dashboard (one-time)](#gateway-mock-dashboard-one-time)).
+  string and gateway credentials, which the mock cannot read
+  ([Gateway mock dashboard (one-time)](#gateway-mock-dashboard-one-time)). The API's own
+  configuration is the issuer and the audience it accepts tokens for, both public.
 - **Basic-auth publishing off** (`scm` and `ftp`), so no publishing password exists to leak;
   `az webapp deploy` uses Microsoft Entra ID. HTTPS only, TLS 1.2 minimum, FTP disabled.
 - **Its log stays on the app** (file system, three days), for `az webapp log tail`. Nothing goes

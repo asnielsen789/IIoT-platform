@@ -7,6 +7,12 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <!--
+      The archive (GatewayMock:Archive, ADR-012): accepted batches in Blob Storage, reached with
+      the app's managed identity. Identity at the version IIoT.Functions uses.
+    -->
+    <PackageReference Include="Azure.Identity" Version="1.21.0" />
+    <PackageReference Include="Azure.Storage.Blobs" Version="12.30.1" />
     <PackageReference Include="JsonSchema.Net" Version="9.6.0" />
     <PackageReference Include="Microsoft.AspNetCore.Authentication.JwtBearer" Version="10.0.14" />
     <!-- The dashboard's sign-in (GatewayMock:Dashboard). Not part of the shared framework. -->

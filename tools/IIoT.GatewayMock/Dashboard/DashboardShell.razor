@@ -9,6 +9,7 @@
     well, in case an encoding gap is ever introduced; inline SVG and the inline stylesheet below
     are what it allows.
 *@
+@using IIoT.GatewayMock.Readings
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -92,6 +93,7 @@
         .tile .sub { display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap; }
         .muted { color: var(--muted); }
         .empty { padding: 2.5rem 1rem; text-align: center; color: var(--muted); }
+        .alert { background: var(--red-soft); border: 1px solid var(--red-line); border-radius: 0.75rem; padding: 0.75rem 1rem; margin: 0 0 1rem; }
         .empty svg { color: var(--red-line); }
 
         .badge { display: inline-flex; align-items: center; gap: 0.3rem; padding: 0.12rem 0.55rem 0.12rem 0.45rem; border-radius: 999px; font-size: 0.78rem; font-weight: 600; white-space: nowrap; }
@@ -193,12 +195,21 @@
     </header>
 
     <main>
+        @if (History.RestoreFailed)
+        {
+            <p class="alert" role="status">
+                Messages stored before the mock started could not be loaded, so only those received since are shown.
+                The next refresh tries again.
+            </p>
+        }
         @ChildContent
     </main>
 
     <footer>
         Shown at @DashboardFormat.Utc(TakenAt)@(RefreshSeconds is { } every ? $"; refreshes every {every} seconds" : "").
-        Held in memory: a restart of the mock empties it.
+        @(History.IsArchived
+            ? "Kept in blob storage: a restart of the mock keeps it."
+            : "Held in memory: a restart of the mock empties it.")
     </footer>
 
     @Overlay
@@ -206,6 +217,10 @@
 </html>
 
 @code {
+    /// <summary>Where the messages are kept, and whether the ones from before a restart were loaded.</summary>
+    [Inject]
+    private ReadingHistory History { get; set; } = default!;
+
     /// <summary>The page's own part of the window title.</summary>
     [Parameter, EditorRequired]
     public string Title { get; set; } = default!;

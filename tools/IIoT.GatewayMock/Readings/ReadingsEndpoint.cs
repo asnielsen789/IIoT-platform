@@ -9,9 +9,16 @@ namespace IIoT.GatewayMock.Readings;
 /// (ADR-011). They differ only in the schema a body is judged by; see <c>docs/gateway-contract.md</c>.
 /// </summary>
 /// <remarks>
-/// A message is one message whichever version delivered it: both store into the same
-/// <see cref="ReadingStore"/>, keyed by device and <c>Idempotency-Key</c>, so a message delivered on
+/// <para>
+/// A message is one message whichever version delivered it: both store through the same
+/// <see cref="ReadingHistory"/>, keyed by device and <c>Idempotency-Key</c>, so a message delivered on
 /// one version and replayed on the other is acknowledged and stored once.
+/// </para>
+/// <para>
+/// <c>202</c> means the batch is stored. With the archive configured (ADR-012) that is a write to
+/// Blob Storage, and when the write fails the answer is <c>503</c>: the sender keeps the batch and
+/// delivers it again, which the platform does by retrying and then dead-lettering (ADR-010).
+/// </para>
 /// </remarks>
 internal static class ReadingsEndpoint
 {
@@ -24,12 +31,12 @@ internal static class ReadingsEndpoint
         // The fallback policy already requires a bearer-authenticated caller for every endpoint;
         // this says so again at the endpoint, where a reader looks first. Only the bearer scheme:
         // a dashboard session cookie never authenticates a delivery (see ApiAuthorization).
-        endpoints.MapPost(Route, (HttpRequest request, ClaimsPrincipal caller, ReadingStore store, TimeProvider timeProvider, ILoggerFactory loggerFactory, CancellationToken cancellationToken) =>
-                AcceptAsync(ReadingsSchema.V1, request, caller, store, timeProvider, loggerFactory, cancellationToken))
+        endpoints.MapPost(Route, (HttpRequest request, ClaimsPrincipal caller, ReadingHistory history, TimeProvider timeProvider, ILoggerFactory loggerFactory, CancellationToken cancellationToken) =>
+                AcceptAsync(ReadingsSchema.V1, request, caller, history, timeProvider, loggerFactory, cancellationToken))
             .RequireAuthorization(ApiAuthorization.Policy);
 
-        endpoints.MapPost(RouteV2, (HttpRequest request, ClaimsPrincipal caller, ReadingStore store, TimeProvider timeProvider, ILoggerFactory loggerFactory, CancellationToken cancellationToken) =>
-                AcceptAsync(ReadingsSchema.V2, request, caller, store, timeProvider, loggerFactory, cancellationToken))
+        endpoints.MapPost(RouteV2, (HttpRequest request, ClaimsPrincipal caller, ReadingHistory history, TimeProvider timeProvider, ILoggerFactory loggerFactory, CancellationToken cancellationToken) =>
+                AcceptAsync(ReadingsSchema.V2, request, caller, history, timeProvider, loggerFactory, cancellationToken))
             .RequireAuthorization(ApiAuthorization.Policy);
     }
 
@@ -42,7 +49,7 @@ internal static class ReadingsEndpoint
         ReadingsSchema schema,
         HttpRequest request,
         ClaimsPrincipal caller,
-        ReadingStore store,
+        ReadingHistory history,
         TimeProvider timeProvider,
         ILoggerFactory loggerFactory,
         CancellationToken cancellationToken)
@@ -62,10 +69,18 @@ internal static class ReadingsEndpoint
 
         var idempotencyKey = keys[0]!;
 
+        // Read whole before parsing: the archive keeps the body byte for byte, as it arrived.
+        byte[] raw;
+        using (var buffer = new MemoryStream())
+        {
+            await request.Body.CopyToAsync(buffer, cancellationToken);
+            raw = buffer.ToArray();
+        }
+
         JsonDocument document;
         try
         {
-            document = await JsonDocument.ParseAsync(request.Body, cancellationToken: cancellationToken);
+            document = ReadingHistory.Parse(raw);
         }
         catch (JsonException ex)
         {
@@ -94,7 +109,22 @@ internal static class ReadingsEndpoint
             var readingCount = body.GetProperty("readings").GetArrayLength();
             var subject = caller.FindFirst("sub")?.Value;
 
-            if (store.TryAdd(deviceId, idempotencyKey, body, subject, timeProvider.GetUtcNow()))
+            bool stored;
+            try
+            {
+                stored = await history.TryAddAsync(deviceId, idempotencyKey, raw, body, subject, timeProvider.GetUtcNow(), cancellationToken);
+            }
+            catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
+            {
+                // The sender logs which message it was; the reason is here, in the exception.
+                logger.LogError(ex, "Could not store an accepted batch; answered 503, so the sender delivers it again");
+                return Results.Problem(
+                    statusCode: StatusCodes.Status503ServiceUnavailable,
+                    title: "Not stored",
+                    detail: "The batch could not be stored. Deliver it again later.");
+            }
+
+            if (stored)
             {
                 logger.LogInformation(
                     "Accepted message {MessageId} from {DeviceId} with {ReadingCount} reading(s) on contract v{ContractVersion}, delivered by {Caller}",

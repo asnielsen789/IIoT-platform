@@ -26,9 +26,11 @@ side of the [gateway contract](../../docs/gateway-contract.md), in both its vers
    with the reason as RFC 9457 problem details. v2's per-kind rules ask every reading whether it
    is each kind, and a "no" is not reported, so the reason names only the rule that was broken.
 
-A batch that passes is stored in memory and answered `202 Accepted`. A replay — same device, same
-key — is answered `202` too, and nothing is stored twice. A message is one message whichever
-version delivers it: delivered on `/v1` and replayed on `/v2`, it is stored once.
+A batch that passes is stored and answered `202 Accepted`: in memory, and first in the
+[archive](#archive) when one is configured, which a restart does not empty. A replay — same device,
+same key — is answered `202` too, and nothing is stored twice. A message is one message whichever
+version delivers it: delivered on `/v1` and replayed on `/v2`, it is stored once. A batch the
+archive cannot take is answered `503` and not stored, so the sender delivers it again.
 
 The mock deliberately does **not** reference `IIoT.Core`. If it judged requests with the
 platform's own types, the forwarder and the mock could agree with each other while both
@@ -57,6 +59,9 @@ The mock does not start with either `Issuer` or `Audience` missing, with neither
 `SigningKeys`, with a plain-HTTP `Authority`, or with a private key in `SigningKeys`. The
 framework's default would be to silently stop checking an issuer or audience that is not
 configured; here a gap in the configuration is a refusal to start.
+
+The optional archive has a section of its own, `GatewayMock:Archive` ([Archive](#archive)), and so
+does the optional dashboard, `GatewayMock:Dashboard` ([Dashboard](#dashboard)).
 
 ### Against Auth0
 
@@ -326,7 +331,7 @@ when the parameter `gatewayMockDashboardAuthority` is set. The procedure, from t
 application to the checks, is
 [Gateway mock dashboard (one-time)](../../infra/README.md#gateway-mock-dashboard-one-time) in the
 infrastructure README. The app then has these four settings, in addition to the three
-`GatewayMock__Jwt__*` settings:
+`GatewayMock__Jwt__*` settings and the two of the [archive](#archive):
 
 | App setting | Value |
 |---|---|
@@ -347,18 +352,52 @@ hand is gone after the next one.
 The session cookie and the sign-in state are protected with ASP.NET Core Data Protection keys. On
 App Service the framework keeps those keys in the app's `%HOME%` storage
 ([Data Protection key management](https://learn.microsoft.com/aspnet/core/security/data-protection/configuration/default-settings)),
-so a restart keeps people signed in. It still empties the readings.
+so a restart keeps people signed in. The readings survive it through the [archive](#archive).
 
-### Not persisted
+---
 
-The readings stay in memory: a restart, or the app unloading when idle (App Service F1 has no
-Always On), empties them. There is no SQLite or other persistence, for three reasons:
-- **It would not stay small.** It adds a native dependency to the mock and its SBOM, a file
-  location to configure, and a second store behind `ReadingStore` for the tests to keep in step.
-- **The host is a poor fit.** On App Service the only persistent location is the network-backed
-  `/home` share, where SQLite's file locking is not dependable.
-- **A demonstration does not need it.** What it needs is the next message, which arrives within
-  minutes; the in-memory store is also what the tests use.
+## Archive
+
+Without an archive the mock holds what it accepts in memory, and a restart empties it. On App
+Service F1 that is every idle spell of about 20 minutes. With `GatewayMock:Archive:ContainerUri`
+set, every accepted batch is also written to an Azure Blob Storage container, and survives
+([ADR-012](../../docs/adr/adr-012-gateway-mock-archive.md),
+[#89](https://github.com/asnielsen789/IIoT-platform/issues/89)).
+
+- **One blob per batch**, named `<deviceId>/<Idempotency-Key>.json`. Its content is the request
+  body byte for byte, and its type `application/json`. Each part of the name is percent-encoded,
+  dots included, so the usual IDs (`tank-000001`, a GUID) are unchanged, and an unusual one can
+  neither reach another device's folder nor form a `.` or `..` segment. Two metadata entries say
+  who delivered it (`caller`, the token's `sub`, percent-encoded) and when (`storedat`).
+- **Written first, create-only.** The write carries `If-None-Match: *`, so the service refuses it
+  when the blob exists. The archive, not memory, decides what is a replay: a replay after a
+  restart is acknowledged and not stored again. A write that fails (storage unreachable, the
+  identity without its role) is answered `503` with nothing stored. The platform retries `5xx`
+  and then dead-letters
+  ([ADR-010](../../docs/adr/adr-010-dead-letter-handling.md)).
+- **Read back when the dashboard is opened**, not at startup, once per process. Most restarts of
+  the hosted mock are there to take one delivery, and reading the archive back each time would cost
+  a read per stored batch for nothing. Batches read back come before those the process accepted
+  itself, oldest first. If the read fails, the dashboard shows what memory holds, says that older
+  messages could not be loaded, and tries again on the next refresh. A blob whose name the archive
+  would not write, or whose content is not JSON, is skipped with a warning.
+- **Retention is the container's.** The templates add a lifecycle rule that deletes blobs older
+  than 30 days. The mock itself never deletes or overwrites anything.
+
+Section `GatewayMock:Archive`, or `GatewayMock__Archive__…` as environment variables and app
+settings:
+
+| Key | Required | Meaning |
+|-----|----------|---------|
+| `ContainerUri` | Switches the archive on | The container, `https://<account>.blob.core.windows.net/<container>`. HTTPS, exactly one container, and no query or fragment: access is by Microsoft Entra ID, never a SAS token in the configuration. |
+| `Credential` | No | `managedidentity` for the app's system-assigned managed identity, as the templates set it. Absent, the developer's own sign-in (Azure CLI, Visual Studio and the like), for a local run against a real account. |
+
+The mock refuses to start with a `ContainerUri` that breaks those rules, or any other
+`Credential`. Startup makes no request to storage: nothing is read or written until a delivery
+or the dashboard needs it. The identity needs Storage Blob Data Contributor, or any role that
+reads, lists and creates blobs, on the container. In staging the templates create the account,
+the container, the retention rule and the role
+([infra/README.md, Gateway mock](../../infra/README.md#gateway-mock)).
 
 ---
 
@@ -376,6 +415,19 @@ socket is opened — and covers:
 - configuration that would weaken validation stops the mock from starting;
 - the platform's real forwarder and token provider delivering to it, end to end;
 - every API policy names the bearer scheme, and only it;
+- the archive, through a stand-in that outlives the mock, so a second mock built on it is the
+  first after a restart: a batch is archived byte for byte with its caller; a replay after a
+  restart is acknowledged, and the first delivery kept; an archive that refuses a write gets `503`
+  and nothing stored, then the delivery again is stored once; the dashboard of the restarted mock
+  shows the earlier batches, reads the archive once and not at startup, puts them first, says when
+  it could not read them and tries again, and skips an entry that is not JSON;
+- the blob archive itself, through the real Azure SDK over a fake Blob service: the blob names
+  for awkward IDs (`..`, `a/b`, `a%2Fb`, dots, non-ASCII) and the names it refuses to read as its
+  own; a create-only Put Blob with the body, type and metadata and a bearer token; a second write
+  of a key refused and the first kept; a refused write thrown; reading back across listing pages,
+  skipping a blob deleted since the listing;
+- every invalid archive setting stops startup; with the container set the blob archive is
+  registered without a request to storage, and without it the mock holds memory only;
 - the dashboard, disabled: its paths are `404` with a valid token, and no other scheme exists;
 - the dashboard, enabled, against an in-process OpenID Connect provider that checks the client
   secret, the redirect URI and the PKCE verifier: the sign-in redirect carries a PKCE challenge;

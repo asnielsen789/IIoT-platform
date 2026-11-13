@@ -249,7 +249,9 @@ independently of the device contract:
 
 - Contract: [`gateway-contract.md`](gateway-contract.md)
 - Normative schema: [`schemas/gateway/readings-v1.schema.json`](schemas/gateway/readings-v1.schema.json)
-- Reference receiver: [`tools/IIoT.GatewayMock`](../tools/IIoT.GatewayMock/README.md)
+- Reference receiver: [`tools/IIoT.GatewayMock`](../tools/IIoT.GatewayMock/README.md), which keeps
+  what it accepts in a Blob Storage archive of its own: the receiver's retention, not the
+  platform's ([ADR-012](adr/adr-012-gateway-mock-archive.md))
 
 ### Modularity for hand-over
 
