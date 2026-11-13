@@ -346,8 +346,45 @@ dotnet run --project tools/IIoT.TestClient -- fleet --hub <hub>
   ([section 11](../../docs/gateway-contract.md#11-version-2)): on v1, their messages fail to
   forward with the reason and are dead-lettered.
 
-Every device's day is tested offline against the platform's own validator: every message valid,
-four samples each, in order, sent after its samples, and no cumulative meter going down.
+Every healthy device's day is tested offline against the platform's own validator: every message
+valid, four samples each, in order, sent after its samples, and no cumulative meter going down.
+
+### Faulty sensors
+
+A fleet of only healthy sensors exercises only the happy path. Seven devices of the reference fleet
+have a faulty sensor, one of each kind
+([#88](https://github.com/asnielsen789/IIoT-platform/issues/88)), marked in the fleet file so a
+test can pick them out:
+
+```json
+{ "id": "tank-000005", "profile": "tank", "site": "South fuel station: AdBlue", "faults": [ "stuck" ] }
+```
+
+| Fault | Device | What the sensor does |
+|---|---|---|
+| `stuck` | `tank-000005` | Reports the same value for eight hours a day, whatever the contents do |
+| `spikes` | `separator-000002` | Three times a day one reading far above the trend, and back at the next |
+| `noisy` | `charger-000004` | Jitter well above the sensor's normal, on every reading |
+| `drift` | `tank-000007` | An offset that grows by the hour until the weekly service resets it, on Mondays at 00:00 UTC |
+| `dropouts` | `tank-000006` | No reading for five hours a day, and one in ten missing at other times. A message that would carry nothing is not sent |
+| `quality` | `wash-000003` | Ten hours a day of flagged readings: five `uncertain`, then five `bad` |
+| `out-of-range` | `separator-000004` | Once a day a value below zero, which the contract rejects, so the platform rejects that whole message, naming the reading |
+
+- **One sensor per device:** its first that measures a quantity of the moment, a level or a
+  power: a tank's level, a charger's power, a car wash's shampoo tank, a separator's oil layer.
+  Never a meter, whose running total cannot go down (ADR-011).
+- **Everything else is unchanged.** The faults draw from a generator of their own, so a faulty
+  device sends exactly what its healthy self would, apart from that sensor. The tests compare
+  each faulty device with its healthy self.
+- **Every day has every fault.** When a fault strikes is tied to the hour of the day, from an hour
+  the device's ID picks, so any day of history shows it, wherever its window falls.
+- **Valid, except out of range.** Every other fault stays within the contract: an implausible
+  value is still a valid one. Telling a faulty sensor from a real change is analysis, which
+  belongs downstream or in alerting
+  ([#18](https://github.com/asnielsen789/IIoT-platform/issues/18)), not in the platform's
+  validation.
+
+`--dry-run` and the run's log name a device's faults: `[tank-000005] tank (faulty: stuck), …`.
 
 ---
 

@@ -63,6 +63,11 @@ public sealed record FleetMessage(string DeviceId, string MessageId, DateTimeOff
 /// each reading's own time. A dashboard then shows the device's last day, not one point.
 /// </para>
 /// <para>
+/// A device with faults (#88) sends its history the same way, with its faulty sensor's readings
+/// changed, missing, or, for <see cref="SensorFault.OutOfRange"/>, outside the contract, so that the
+/// platform rejects the message that carries them.
+/// </para>
+/// <para>
 /// The payloads are built from scratch as JSON, not from the platform's types, for the reason the
 /// client replays fixtures as bytes: the client must not agree with the platform by sharing its
 /// code. Values are deterministic for a device, its schedule and its end time; message IDs are new
@@ -82,6 +87,7 @@ public static class FleetHistory
         }
 
         var behaviour = DeviceBehaviour.For(device);
+        var faults = new FaultySensor(device);
         var jitter = new Random(device.Seed ^ 0x5EED);
 
         var end = new DateTimeOffset(now.UtcTicks - now.UtcTicks % schedule.SampleEvery.Ticks, TimeSpan.Zero);
@@ -90,21 +96,29 @@ public static class FleetHistory
 
         var samples = Enumerable.Range(0, sampleCount)
             .Select(index => first + index * schedule.SampleEvery)
-            .Select(at => (At: at.AddSeconds(jitter.Next(0, 9)), Readings: behaviour.Read(at, schedule.SampleEvery)))
+            .Select(at => (At: at.AddSeconds(jitter.Next(0, 9)), Readings: faults.Apply(at, behaviour.Read(at, schedule.SampleEvery))))
             .ToList();
 
         var battery = 3.62 - jitter.NextDouble() * 0.15;
         var sequence = 1000 + device.Seed % 9000;
 
-        return samples
-            .Chunk(schedule.SamplesPerMessage)
-            .Select((chunk, index) =>
+        var messages = new List<FleetMessage>();
+        foreach (var chunk in samples.Chunk(schedule.SamplesPerMessage))
+        {
+            var sentAt = chunk[^1].At.AddSeconds(12 + jitter.Next(0, 20));
+            battery -= 0.0005;
+
+            // A sensor that read nothing since the last message (#88) leaves the device nothing to
+            // send: it sends no message, and so uses no sequence number.
+            if (chunk.All(sample => sample.Readings.Count == 0))
             {
-                var sentAt = chunk[^1].At.AddSeconds(12 + jitter.Next(0, 20));
-                battery -= 0.0005;
-                return Message(device, sentAt, sequence + index, chunk, battery, jitter);
-            })
-            .ToList();
+                continue;
+            }
+
+            messages.Add(Message(device, sentAt, sequence++, chunk, battery, jitter));
+        }
+
+        return messages;
     }
 
     private static FleetMessage Message(

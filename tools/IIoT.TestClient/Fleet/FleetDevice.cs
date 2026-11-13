@@ -56,4 +56,10 @@ public sealed record FleetDevice(string Id, DeviceProfile Profile, string Site)
 
     /// <summary>Whether the device runs on a battery, and so reports its voltage. Chargers and car washes are mains-powered.</summary>
     public bool OnBattery => Profile is DeviceProfile.Tank or DeviceProfile.OilSeparator;
+
+    /// <summary>
+    /// How its sensor misbehaves (#88), if at all: empty for a healthy device. Applied by
+    /// <see cref="FaultySensor"/>, to one sensor of the device.
+    /// </summary>
+    public IReadOnlyList<SensorFault> Faults { get; init; } = [];
 }
