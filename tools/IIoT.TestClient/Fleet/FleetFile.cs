@@ -8,11 +8,12 @@ namespace IIoT.TestClient.Fleet;
 /// </summary>
 /// <remarks>
 /// <code>
-/// { "devices": [ { "id": "charger-000001", "profile": "charger", "site": "North fuel station" } ] }
+/// { "devices": [ { "id": "charger-000001", "profile": "charger", "site": "North fuel station" },
+///                { "id": "tank-000005", "profile": "tank", "faults": [ "stuck" ] } ] }
 /// </code>
 /// Profiles are <c>tank</c>, <c>charger</c>, <c>car-wash</c> and <c>oil-separator</c>. Every ID must
 /// be a valid DPS registration ID, since the fleet's devices provision themselves (#48), and IDs
-/// are unique.
+/// are unique. <c>faults</c> is optional (#88): <see cref="SensorFaultNames.All"/>.
 /// </remarks>
 public static class FleetFile
 {
@@ -98,7 +99,28 @@ public static class FleetFile
             ? siteElement.GetString() ?? ""
             : "";
 
-        return new FleetDevice(id, profile, site);
+        return new FleetDevice(id, profile, site) { Faults = Faults(entry, location) };
+    }
+
+    private static IReadOnlyList<SensorFault> Faults(JsonElement entry, string location)
+    {
+        if (!entry.TryGetProperty("faults", out var faults))
+        {
+            return [];
+        }
+
+        if (faults.ValueKind != JsonValueKind.Array)
+        {
+            throw new InvalidDataException($"{location}: \"faults\" must be an array of fault names.");
+        }
+
+        return faults.EnumerateArray()
+            .Select(fault => fault.ValueKind == JsonValueKind.String && SensorFaultNames.Parse(fault.GetString()!) is { } known
+                ? known
+                : throw new InvalidDataException(
+                    $"{location}: unknown fault {fault.GetRawText()}; expected {SensorFaultNames.All}."))
+            .Distinct()
+            .ToList();
     }
 
     private static string Text(JsonElement entry, string name, string location) =>

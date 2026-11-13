@@ -71,7 +71,7 @@ public sealed class FleetRunner
             if (_options.DryRun)
             {
                 await _log.WriteLineAsync(
-                    $"[{device.Id}] {Name(device.Profile)}, {device.Site}: {messages.Count} message(s), " +
+                    $"[{device.Id}] {Name(device.Profile)}{Faults(device)}, {device.Site}: {messages.Count} message(s), " +
                     $"{messages.Sum(message => message.MeasurementCount)} measurement(s)");
                 await _log.WriteLineAsync($"  newest: {Encoding.UTF8.GetString(messages[^1].Payload)}");
                 continue;
@@ -153,7 +153,7 @@ public sealed class FleetRunner
                 }
 
                 await _log.WriteLineAsync(
-                    $"[{device.Id}] {Name(device.Profile)}: sent {sent} message(s), " +
+                    $"[{device.Id}] {Name(device.Profile)}{Faults(device)}: sent {sent} message(s), " +
                     $"{messages.Sum(message => message.MeasurementCount)} measurement(s)");
                 return true;
             }
@@ -170,6 +170,10 @@ public sealed class FleetRunner
             return false;
         }
     }
+
+    /// <summary>A device's faults as the log names them, or nothing for a healthy device.</summary>
+    private static string Faults(FleetDevice device) =>
+        device.Faults.Count == 0 ? "" : $" (faulty: {string.Join(", ", device.Faults.Select(SensorFaultNames.Name))})";
 
     private static string Name(DeviceProfile profile) => profile switch
     {

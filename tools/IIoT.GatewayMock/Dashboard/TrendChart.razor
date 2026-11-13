@@ -7,7 +7,8 @@
 
     The ring around a dot is the reading's quality: white for ok, amber for uncertain, black for
     bad. Each dot carries a <title>, which browsers show as a tooltip, with the reading's sensor,
-    value, time and quality.
+    value, time and quality. A line breaks where its sensor has a gap (TrendLine.Segments), so a
+    stretch without readings shows as one.
 *@
 @if (Trend.PointCount == 0)
 {
@@ -31,16 +32,19 @@ else
                           y1="@Trend.Number(tick.Y)" y2="@Trend.Number(tick.Y)" />
                 }
 
-                @if (Trend.Lines.Count == 1 && Trend.Lines[0].Points.Count > 1)
+                @if (Trend.Lines.Count == 1)
                 {
-                    <polygon class="area" points="@Trend.Lines[0].Area" />
+                    @foreach (var segment in Trend.Lines[0].Segments.Where(segment => segment.Count > 1))
+                    {
+                        <polygon class="area" points="@TrendLine.Area(segment)" />
+                    }
                 }
 
                 @foreach (var line in Trend.Lines)
                 {
-                    @if (line.Points.Count > 1)
+                    @foreach (var segment in line.Segments.Where(segment => segment.Count > 1))
                     {
-                        <polyline class="line s@(line.Colour)" points="@line.Line" />
+                        <polyline class="line s@(line.Colour)" points="@TrendLine.Line(segment)" />
                     }
 
                     @foreach (var point in line.Points)

@@ -27,7 +27,7 @@ public class DashboardViewTests
 
         Assert.Equal(["1400", "1450", "1500"], trend.ValueTicks.Select(tick => tick.Label));
         Assert.Equal("mm", trend.Unit);
-        Assert.StartsWith(Trend.Number(Trend.PlotLeft) + "," + Trend.Number(Trend.PlotBottom), trend.Lines[0].Area, StringComparison.Ordinal);
+        Assert.StartsWith(Trend.Number(Trend.PlotLeft) + "," + Trend.Number(Trend.PlotBottom), TrendLine.Area(trend.Lines[0].Points), StringComparison.Ordinal);
     }
 
     /// <summary>One reading, or readings that never change, have no range to scale by; they still land inside the plot.</summary>
@@ -38,7 +38,7 @@ public class DashboardViewTests
         var point = Assert.Single(Assert.Single(single.Lines).Points);
         Assert.Equal((Trend.PlotLeft + Trend.PlotRight) / 2, point.X);
         Assert.InRange(point.Y, Trend.PlotTop, Trend.PlotBottom);
-        Assert.Equal("", single.Lines[0].Area);
+        Assert.Equal("", TrendLine.Area(single.Lines[0].Points));
         Assert.Equal("1432.5", Assert.Single(single.ValueTicks).Label);
 
         var flat = Trend.Create("level", [Reading(1000, "2026-10-30T00:00:00Z"), Reading(1000, "2026-10-30T04:00:00Z")]);
@@ -98,6 +98,30 @@ public class DashboardViewTests
     public void Ticks_AreShortEnoughForTheirColumn(double value, string label)
     {
         Assert.Equal(label, Trend.Tick(value));
+    }
+
+    /// <summary>
+    /// A line breaks where its sensor went quiet for a few hours (#88), such as a dropout or a
+    /// rejected message, so the chart does not draw readings that were never sent. A single missed
+    /// reading is not a gap.
+    /// </summary>
+    [Fact]
+    public void Trend_BreaksItsLine_WhereTheSensorWentQuiet()
+    {
+        var hourly = new[] { 0, 1, 2, 3, 9, 10, 11 }
+            .Select(hour => Reading(1000 - hour, $"2026-10-30T{hour:D2}:00:00Z"))
+            .ToList();
+
+        var segments = Trend.Create("level", hourly).Lines[0].Segments;
+
+        Assert.Equal([4, 3], segments.Select(segment => segment.Count));
+        Assert.Equal(TrendLine.Line(segments[0]) + " " + TrendLine.Line(segments[1]), TrendLine.Line(Trend.Create("level", hourly).Lines[0].Points));
+
+        var oneMissed = new[] { 0, 1, 3, 4 }.Select(hour => Reading(1000 - hour, $"2026-10-30T{hour:D2}:00:00Z")).ToList();
+        Assert.Single(Trend.Create("level", oneMissed).Lines[0].Segments);
+
+        var two = new[] { 0, 9 }.Select(hour => Reading(1000 - hour, $"2026-10-30T{hour:D2}:00:00Z")).ToList();
+        Assert.Single(Trend.Create("level", two).Lines[0].Segments);
     }
 
     [Theory]

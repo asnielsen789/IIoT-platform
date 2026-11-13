@@ -107,8 +107,9 @@ Three views, in red and white
   by arrival, so a late backfill or a redelivered message never displaces a newer reading.
 - **A device** (`/dashboard/device?id=<device>`): the latest reading of each series, a chart per
   kind it measures (its newest 100 readings per series, by measurement time, a line per sensor,
-  each reading's quality as the ring around its dot) with what each series shows above it, and its
-  newest 100 messages, by default newest first by when the platform received them: when the
+  each reading's quality as the ring around its dot, a line broken where its sensor went quiet
+  for more than two and a half of its usual intervals) with what each series shows above it, and
+  its newest 100 messages, by default newest first by when the platform received them: when the
   platform received each message, its `messageId` (which is also the `Idempotency-Key`), its
   readings, its worst quality and its
   firmware. A replay is acknowledged but not stored again, so it never appears twice.

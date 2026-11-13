@@ -130,13 +130,60 @@ public sealed record Trend(
 /// <param name="Points">Its readings, each with its position.</param>
 public sealed record TrendLine(string? Sensor, int Colour, IReadOnlyList<TrendPoint> Points)
 {
-    /// <summary>The <c>points</c> attribute of the line through the readings.</summary>
-    public string Line => string.Join(' ', Points.Select(point => $"{Trend.Number(point.X)},{Trend.Number(point.Y)}"));
+    /// <summary>How many of the line's usual intervals without a reading make a gap.</summary>
+    public const double GapFactor = 2.5;
 
-    /// <summary>The <c>points</c> attribute of the shaded area under the line; empty for fewer than two readings.</summary>
-    public string Area => Points.Count < 2
+    /// <summary>
+    /// The readings in runs without a gap, each drawn as a line of its own, so the chart does not
+    /// pretend the sensor reported where it did not (#88).
+    /// </summary>
+    /// <remarks>
+    /// A gap is more than <see cref="GapFactor"/> times the line's usual interval, the median one,
+    /// without a reading: a sensor that dropped out, or a message the platform rejected, for a few
+    /// hours. A single missed reading is not a gap. Fewer than three readings have no usual
+    /// interval, and are one run.
+    /// </remarks>
+    public IReadOnlyList<IReadOnlyList<TrendPoint>> Segments
+    {
+        get
+        {
+            if (Points.Count < 3)
+            {
+                return Points.Count == 0 ? [] : [Points];
+            }
+
+            var intervals = Points.Zip(Points.Skip(1), Interval).Order().ToList();
+            var usual = intervals[intervals.Count / 2];
+
+            var segments = new List<IReadOnlyList<TrendPoint>>();
+            var segment = new List<TrendPoint> { Points[0] };
+            for (var i = 1; i < Points.Count; i++)
+            {
+                if (usual > TimeSpan.Zero && Interval(Points[i - 1], Points[i]) > usual * GapFactor)
+                {
+                    segments.Add(segment);
+                    segment = [];
+                }
+
+                segment.Add(Points[i]);
+            }
+
+            segments.Add(segment);
+            return segments;
+        }
+    }
+
+    /// <summary>The <c>points</c> attribute of a line through <paramref name="points"/>.</summary>
+    public static string Line(IReadOnlyList<TrendPoint> points) =>
+        string.Join(' ', points.Select(point => $"{Trend.Number(point.X)},{Trend.Number(point.Y)}"));
+
+    /// <summary>The <c>points</c> attribute of the shaded area under <paramref name="points"/>; empty for fewer than two.</summary>
+    public static string Area(IReadOnlyList<TrendPoint> points) => points.Count < 2
         ? ""
-        : $"{Trend.Number(Points[0].X)},{Trend.Number(Trend.PlotBottom)} {Line} {Trend.Number(Points[^1].X)},{Trend.Number(Trend.PlotBottom)}";
+        : $"{Trend.Number(points[0].X)},{Trend.Number(Trend.PlotBottom)} {Line(points)} {Trend.Number(points[^1].X)},{Trend.Number(Trend.PlotBottom)}";
+
+    private static TimeSpan Interval(TrendPoint earlier, TrendPoint later) =>
+        later.Reading.MeasuredAt!.Value - earlier.Reading.MeasuredAt!.Value;
 }
 
 /// <summary>One reading on a chart.</summary>

@@ -27,6 +27,18 @@ public class FleetTests
         return data;
     }
 
+    /// <summary>The reference fleet's devices without faults; the faulty ones are <see cref="SensorFaultTests"/>'.</summary>
+    public static TheoryData<string> HealthyReferenceDevices()
+    {
+        var data = new TheoryData<string>();
+        foreach (var device in FleetFile.Load(FleetFile.ReferencePath).Where(device => device.Faults.Count == 0))
+        {
+            data.Add(device.Id);
+        }
+
+        return data;
+    }
+
     [Fact]
     public void ReferenceFleet_IsTwentyDevicesOfFourTypes()
     {
@@ -42,12 +54,12 @@ public class FleetTests
     }
 
     /// <summary>
-    /// Every message of every device's day validates against the platform's contract, and is shaped
-    /// as a buffered NB-IoT device sends it: six messages, each with four hours of samples in order,
-    /// sent after the last of them, within the contract's 64 measurements.
+    /// Every message of every healthy device's day validates against the platform's contract, and is
+    /// shaped as a buffered NB-IoT device sends it: six messages, each with four hours of samples in
+    /// order, sent after the last of them, within the contract's 64 measurements.
     /// </summary>
     [Theory]
-    [MemberData(nameof(ReferenceDevices))]
+    [MemberData(nameof(HealthyReferenceDevices))]
     public void History_IsADayOfValidBufferedMessages(string deviceId)
     {
         var device = Device(deviceId);
@@ -76,15 +88,21 @@ public class FleetTests
         }
     }
 
-    /// <summary>The cumulative series only ever grow (ADR-011): no message lowers a meter.</summary>
+    /// <summary>
+    /// The cumulative series only ever grow (ADR-011): no message lowers a meter, faulty devices'
+    /// included, since a fault never touches a meter.
+    /// </summary>
     [Theory]
     [MemberData(nameof(ReferenceDevices))]
     public void History_CountersNeverGoDown(string deviceId)
     {
         var history = FleetHistory.Create(Device(deviceId), FleetSchedule.Default, Now);
 
+        // The messages the platform accepts; an out-of-range reading's message never reaches a meter's history.
         var series = history
-            .SelectMany(message => TelemetryValidator.Validate(Encoding.UTF8.GetString(message.Payload)).Message!.Measurements)
+            .Select(message => TelemetryValidator.Validate(Encoding.UTF8.GetString(message.Payload)))
+            .Where(result => result.IsValid)
+            .SelectMany(result => result.Message!.Measurements)
             .Where(measurement => measurement.Type is "energy" or "volume" or "count")
             .GroupBy(measurement => (measurement.Type, measurement.Sensor));
 
@@ -149,12 +167,25 @@ public class FleetTests
     [InlineData("""{ "devices": [ { "id": "tank-1", "profile": "boiler" } ] }""", "unknown profile 'boiler'")]
     [InlineData("""{ "devices": [ { "profile": "tank" } ] }""", "\"id\" is required")]
     [InlineData("""[ ]""", "\"devices\" array")]
+    [InlineData("""{ "devices": [ { "id": "tank-1", "profile": "tank", "faults": [ "boiling" ] } ] }""", "unknown fault \"boiling\"; expected stuck, spikes")]
+    [InlineData("""{ "devices": [ { "id": "tank-1", "profile": "tank", "faults": "stuck" } ] }""", "\"faults\" must be an array")]
     public void FleetFile_ThatIsNotAFleet_SaysWhyAndWhere(string json, string reason)
     {
         var exception = Assert.Throws<InvalidDataException>(() => FleetFile.Parse(json, "test.json"));
 
         Assert.Contains(reason, exception.Message, StringComparison.Ordinal);
         Assert.StartsWith("test.json", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void FleetFile_Faults_AreOptional_AndRepeatsCountOnce()
+    {
+        var fleet = FleetFile.Parse(
+            """{ "devices": [ { "id": "tank-1", "profile": "tank" }, { "id": "tank-2", "profile": "tank", "faults": [ "out-of-range", "stuck", "stuck" ] } ] }""",
+            "test.json");
+
+        Assert.Empty(fleet[0].Faults);
+        Assert.Equal([SensorFault.OutOfRange, SensorFault.Stuck], fleet[1].Faults);
     }
 
     [Fact]
@@ -192,14 +223,15 @@ public class FleetTests
     public async Task DryRun_PrintsEachDevice_AndConnectsToNothing()
     {
         var log = new StringWriter();
-        var options = new FleetOptions(null, FleetFile.ReferencePath, "unused", FleetSchedule.Default, ["charger-000002", "separator-000003"], DryRun: true);
+        var options = new FleetOptions(null, FleetFile.ReferencePath, "unused", FleetSchedule.Default, ["charger-000002", "separator-000003", "tank-000005"], DryRun: true);
 
         var failed = await new FleetRunner(options, log, () => Now).RunAsync(CancellationToken.None);
 
         Assert.Equal(0, failed);
         var output = log.ToString();
-        Assert.Contains("[charger-000002] EV charger", output, StringComparison.Ordinal);
-        Assert.Contains("[separator-000003] oil separator", output, StringComparison.Ordinal);
+        Assert.Contains("[charger-000002] EV charger,", output, StringComparison.Ordinal);
+        Assert.Contains("[separator-000003] oil separator,", output, StringComparison.Ordinal);
+        Assert.Contains("[tank-000005] tank (faulty: stuck),", output, StringComparison.Ordinal);
         Assert.DoesNotContain("tank-000001", output, StringComparison.Ordinal);
     }
 
