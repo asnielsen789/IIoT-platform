@@ -1469,7 +1469,9 @@ A device certificate is valid for two years and a device lives ten or more. Run 
    From then on the hub refuses the old certificate.
 
 **The old certificate still provisions.** On staging, provisioning again with the old certificate
-was accepted and put its thumbprint back in the hub. The enrollment group accepts every
+was accepted and put its thumbprint back in the hub. That is how `tank-000003` returned to its
+first certificate, the one the reference fleet uses, on 2026-11-13, with the same
+`generationId`. The enrollment group accepts every
 certificate the issuing CA signed for that CN until it expires. That is harmless when a
 certificate is renewed because it expires. It is not harmless when it is renewed because its key
 may be compromised: then the old certificate must also be shut out in DPS, as below.
@@ -1942,6 +1944,40 @@ device's identity in the hub it assigns, and tells the device which hub that is.
 - **Devices are registered by thumbprint.** DPS gives each device a hub identity holding its
   own certificate's thumbprint, not a CA-signed one. That changes how certificates are renewed
   and revoked: see [Devices provisioned through DPS](#devices-provisioned-through-dps).
+
+#### If the link update fails
+
+Seen on staging on 2026-10-30
+([#79](https://github.com/asnielsen789/IIoT-platform/issues/79)). From 20:04 UTC every write to
+the DPS instance failed with `IH500018`, "Value cannot be null. (Parameter 'sdkMetadata')": the
+deployment, a module-only redeployment and an edit in the portal alike. The same template had
+deployed four hours earlier, and Service Health showed no incident. ARM kept retrying the
+deployment's `provisioningService` module, which succeeded after three hours, at 23:10 UTC.
+The link has held the hub's current key since; provisioning was checked again on 2026-11-13.
+
+- **What breaks meanwhile.** The hub already has its new keys, but the link still holds the old
+  `dps-link` key, so every registration fails with `401002`. Devices already registered are not
+  affected: they connect to the hub directly, and the link is only how DPS writes to the hub.
+- **Watch the module, not only the deployment.** The subscription deployment shows `Running`
+  throughout. The resource group's nested deployments show which module is still waiting:
+
+  ```sh
+  az deployment group list --resource-group "$RG" \
+    --query "sort_by(@, &properties.timestamp)[-6:].{name:name, state:properties.provisioningState, duration:properties.duration}" -o table
+  ```
+
+- **Cancelling did not stop it.** The subscription deployment was cancelled after half an hour,
+  but the nested `provisioningService` deployment went on and succeeded. A cancelled deployment
+  has no outputs, so read the names from the one before it: set `DEPLOYMENT` to that name.
+- **The fallback is direct registration.** A device that has to come online meanwhile can be
+  registered CA-signed with `IIoT.DeviceCa issue --hub`, as in
+  [Device certificate authority](#4-issue-a-device-certificate). Seventeen devices of the test
+  client's reference fleet were registered this way
+  ([A simulated fleet](../tools/IIoT.TestClient/README.md#a-simulated-fleet)). They stay
+  CA-signed afterwards; provisioning one through DPS later would replace that with its
+  certificate's thumbprint.
+- **To confirm the link works again**, provision a device that DPS registered before: it is
+  assigned again, and its hub identity keeps its `generationId`.
 
 ## What the first deployment confirmed
 
