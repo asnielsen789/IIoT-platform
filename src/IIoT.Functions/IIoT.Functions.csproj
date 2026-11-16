@@ -57,7 +57,7 @@
       no SBOM and no Dependabot run sees (https://github.com/asnielsen789/IIoT-platform/issues/35).
     -->
     <PackageReference Include="Microsoft.Azure.Functions.Worker.Extensions.Storage.Queues" Version="5.5.5" />
-    <PackageReference Include="Microsoft.Extensions.Http.Resilience" Version="10.11.0" />
+    <PackageReference Include="Microsoft.Extensions.Http.Resilience" Version="11.0.0" />
   </ItemGroup>
 
   <ItemGroup>
