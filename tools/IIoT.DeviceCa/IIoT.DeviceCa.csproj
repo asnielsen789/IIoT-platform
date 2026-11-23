@@ -9,6 +9,7 @@
 
   <ItemGroup>
     <!-- The operator's own sign-in (Azure CLI locally); see Program.CreateCredential. -->
+    <PackageReference Include="Azure.Core" Version="1.65.0" />
     <PackageReference Include="Azure.Identity" Version="1.21.0" />
 
     <!-- The CA keys live in Key Vault and sign there; the certificates are stored as secrets. -->
@@ -21,6 +22,8 @@
       with Microsoft Entra ID, so no hub-level shared access key is involved.
     -->
     <PackageReference Include="Microsoft.Azure.Devices" Version="1.41.1" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.15" />
+    <PackageReference Include="Microsoft.Extensions.Options" Version="10.0.15" />
   </ItemGroup>
 
 </Project>
